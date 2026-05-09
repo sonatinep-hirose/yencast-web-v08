@@ -1,0 +1,485 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>YenCast v0.08 - USD/JPY 予測</title>
+    <script src="https://cdn.plot.ly/plotly-2.27.0.min.js"></script>
+    <style>
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+
+        body {
+            background: #0d0d1a;
+            color: #dde0f0;
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Hiragino Sans', sans-serif;
+            min-height: 100vh;
+            display: flex;
+            flex-direction: column;
+        }
+
+        header {
+            background: #12122a;
+            padding: 10px 16px;
+            border-bottom: 1px solid #2a2a55;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            flex-shrink: 0;
+        }
+        .logo {
+            font-size: 1.3rem;
+            font-weight: 700;
+            color: #00c8ff;
+            letter-spacing: 0.05em;
+        }
+        .logo-sub {
+            font-size: 0.75rem;
+            color: #666;
+            margin-top: 2px;
+        }
+
+        .status-bar {
+            background: #0f0f24;
+            padding: 7px 16px;
+            border-bottom: 1px solid #2a2a55;
+            display: flex;
+            gap: 20px;
+            flex-wrap: wrap;
+            align-items: center;
+            font-size: 0.82rem;
+            flex-shrink: 0;
+        }
+        .status-item {
+            display: flex;
+            align-items: center;
+            gap: 7px;
+        }
+        .status-label { color: #666; }
+        .badge {
+            display: inline-block;
+            padding: 2px 9px;
+            border-radius: 4px;
+            font-size: 0.78rem;
+            font-weight: 600;
+            border: 1px solid;
+        }
+        .badge-range  { color: #66bb6a; border-color: #66bb6a; background: rgba(102,187,106,0.12); }
+        .badge-trend  { color: #6495ed; border-color: #6495ed; background: rgba(100,149,237,0.15); }
+        .badge-chaos  { color: #ff6030; border-color: #ff6030; background: rgba(255,80,0,0.15); }
+        .badge-valid  { color: #26c6da; border-color: #26c6da; background: rgba(38,198,218,0.12); }
+        .badge-invalid{ color: #ff7043; border-color: #ff7043; background: rgba(255,112,67,0.12); }
+        .badge-buy    { color: #00e676; border-color: #00e676; background: rgba(0,230,118,0.12); }
+        .badge-sell   { color: #ff1744; border-color: #ff1744; background: rgba(255,23,68,0.12); }
+        .badge-flat   { color: #888;    border-color: #555;    background: transparent; }
+
+        .controls {
+            padding: 8px 16px;
+            display: flex;
+            gap: 7px;
+            flex-wrap: wrap;
+            align-items: center;
+            background: #0d0d1a;
+            border-bottom: 1px solid #1e1e40;
+            flex-shrink: 0;
+        }
+        .btn {
+            padding: 5px 14px;
+            border: 1px solid #33336a;
+            background: #17173a;
+            color: #aab0d0;
+            border-radius: 5px;
+            cursor: pointer;
+            font-size: 0.82rem;
+            transition: background 0.15s, border-color 0.15s, color 0.15s;
+            white-space: nowrap;
+        }
+        .btn:hover     { background: #22225a; border-color: #00c8ff; color: #00c8ff; }
+        .btn.active    { background: #003d5c; border-color: #00c8ff; color: #00c8ff; font-weight: 600; }
+        .btn-upload    { margin-left: auto; border-color: #4caf50; color: #4caf50; background: #0f2a10; }
+        .btn-upload:hover { background: #1a3d1a; color: #81c784; border-color: #81c784; }
+
+        #chart-wrap {
+            flex: 1;
+            min-height: 0;
+            position: relative;
+        }
+        #chart { width: 100%; height: 100%; }
+
+        #file-input { display: none; }
+
+        .overlay {
+            display: none;
+            position: fixed;
+            inset: 0;
+            background: rgba(0,0,0,0.55);
+            z-index: 200;
+            align-items: center;
+            justify-content: center;
+        }
+        .overlay.show { display: flex; }
+        .overlay-box {
+            background: #17173a;
+            border: 1px solid #00c8ff;
+            padding: 24px 36px;
+            border-radius: 8px;
+            color: #00c8ff;
+            font-size: 1rem;
+        }
+
+        .error-msg {
+            display: none;
+            position: fixed;
+            bottom: 16px;
+            left: 50%;
+            transform: translateX(-50%);
+            background: #3a1010;
+            border: 1px solid #ef5350;
+            color: #ef5350;
+            padding: 10px 20px;
+            border-radius: 6px;
+            z-index: 300;
+            font-size: 0.85rem;
+        }
+
+        /* モードバーアイコンを2倍に */
+        .modebar-btn svg { width: 32px !important; height: 32px !important; }
+        .modebar-btn { padding: 6px 4px !important; }
+
+        @media (max-width: 540px) {
+            .logo { font-size: 1.1rem; }
+            .status-bar { gap: 12px; font-size: 0.78rem; }
+            .btn { padding: 5px 10px; font-size: 0.78rem; }
+            .btn-upload { margin-left: 0; width: 100%; text-align: center; }
+        }
+    </style>
+</head>
+<body>
+
+<header>
+    <div>
+        <div class="logo">YenCast <span style="font-size:0.75rem;color:#888;font-weight:400;">v0.08</span></div>
+        <div class="logo-sub">USD/JPY 価格予測ダッシュボード（感情スコア統合）</div>
+    </div>
+</header>
+
+<div class="status-bar">
+    <div class="status-item">
+        <span class="status-label">最終データ:</span>
+        <span id="latest-time">-</span>
+    </div>
+    <div class="status-item">
+        <span class="status-label">レジーム:</span>
+        <span id="regime-badge" class="badge">-</span>
+    </div>
+    <div class="status-item">
+        <span class="status-label">有効性:</span>
+        <span id="valid-badge" class="badge">-</span>
+    </div>
+    <div class="status-item">
+        <span class="status-label">シグナル:</span>
+        <span id="signal-badge" class="badge">-</span>
+    </div>
+    <div class="status-item">
+        <span class="status-label">信頼度(r8):</span>
+        <span id="ease-badge" class="badge badge-flat">-</span>
+    </div>
+</div>
+
+<div class="controls">
+    <button class="btn active" onclick="setRange(24, this)">24時間</button>
+    <button class="btn" onclick="setRange(72, this)">72時間</button>
+    <button class="btn" onclick="setRange(168, this)">1週間</button>
+    <button class="btn" onclick="setRange(0, this)">全期間</button>
+    <input type="file" id="file-input" accept=".csv">
+    <button class="btn btn-upload" onclick="document.getElementById('file-input').click()">CSV アップロード</button>
+</div>
+
+<div id="chart-wrap">
+    <div id="chart"></div>
+</div>
+
+<div class="overlay" id="loading">
+    <div class="overlay-box">読み込み中...</div>
+</div>
+<div class="error-msg" id="error-msg"></div>
+
+<script>
+    var appData = {{ data | safe }};
+    var currentRange = 24;
+
+    /* ---- Status badges ---- */
+    function regimeClass(r) {
+        var ru = (r || '').toUpperCase();
+        if (ru === 'TREND') return 'badge-trend';
+        if (ru === 'CHAOS') return 'badge-chaos';
+        return 'badge-range';
+    }
+    function regimeLabel(r) {
+        var ru = (r || '').toUpperCase();
+        if (ru === 'TREND') return 'トレンド (Trend)';
+        if (ru === 'CHAOS') return 'カオス (Chaos)';
+        if (ru === 'RANGE') return 'レンジ (Range)';
+        return r || '-';
+    }
+
+    function updateStatus(data) {
+        document.getElementById('latest-time').textContent = data.latest_time;
+
+        var rb = document.getElementById('regime-badge');
+        rb.textContent = regimeLabel(data.latest_regime);
+        rb.className = 'badge ' + regimeClass(data.latest_regime);
+
+        var vb = document.getElementById('valid-badge');
+        var ok = (data.latest_is_valid === 'True' || data.latest_is_valid === true);
+        vb.textContent = ok ? '有効' : '無効';
+        vb.className = 'badge ' + (ok ? 'badge-valid' : 'badge-invalid');
+
+        var sb = document.getElementById('signal-badge');
+        var sig = (data.latest_signal || 'FLAT').toUpperCase();
+        if (sig === 'BUY')  { sb.textContent = '▲ BUY';  sb.className = 'badge badge-buy'; }
+        else if (sig === 'SELL') { sb.textContent = '▼ SELL'; sb.className = 'badge badge-sell'; }
+        else                { sb.textContent = '─ FLAT'; sb.className = 'badge badge-flat'; }
+
+        var eb = document.getElementById('ease-badge');
+        var ease = data.latest_ease != null ? data.latest_ease : -1;
+        if (ease < 0) {
+            eb.textContent = 'N/A'; eb.className = 'badge badge-flat';
+        } else if (ease >= 60) {
+            eb.textContent = ease + ' / 100'; eb.className = 'badge badge-valid';
+        } else if (ease >= 40) {
+            eb.textContent = ease + ' / 100'; eb.className = 'badge badge-flat';
+        } else {
+            eb.textContent = ease + ' / 100'; eb.className = 'badge badge-invalid';
+        }
+    }
+
+    /* ---- Regime shading ---- */
+    function findBlocks(times, regimes, target) {
+        var blocks = [];
+        var start = null;
+        for (var i = 0; i < regimes.length; i++) {
+            if (regimes[i] === target && start === null) {
+                start = times[i];
+            } else if (regimes[i] !== target && start !== null) {
+                blocks.push({ start: start, end: times[i] });
+                start = null;
+            }
+        }
+        if (start !== null) blocks.push({ start: start, end: times[times.length - 1] });
+        return blocks;
+    }
+
+    function buildRegimeShapes(data) {
+        var shapes = [];
+        if (!data.regime || data.regime.length === 0) return shapes;
+        findBlocks(data.time, data.regime, 'CHAOS').forEach(function(b) {
+            shapes.push({ type: 'rect', xref: 'x', yref: 'paper',
+                x0: b.start, x1: b.end, y0: 0, y1: 1,
+                fillcolor: 'rgba(255,80,0,0.13)', line: { width: 0 }, layer: 'below' });
+        });
+        findBlocks(data.time, data.regime, 'TREND').forEach(function(b) {
+            shapes.push({ type: 'rect', xref: 'x', yref: 'paper',
+                x0: b.start, x1: b.end, y0: 0, y1: 1,
+                fillcolor: 'rgba(100,149,237,0.11)', line: { width: 0 }, layer: 'below' });
+        });
+        return shapes;
+    }
+
+    /* ---- Chart ---- */
+    function buildTraces(data) {
+        return [
+            {
+                x: data.time, y: data.close,
+                name: '実際の価格 (Close)',
+                type: 'scatter', mode: 'lines',
+                line: { color: '#2196F3', width: 2 }
+            },
+            {
+                x: data.time_1h, y: data.pred_close_1h,
+                name: '1時間後予測',
+                type: 'scatter', mode: 'lines',
+                line: { color: '#FF9800', dash: 'dot', width: 1.8 }
+            },
+            {
+                x: data.time_4h, y: data.pred_close_4h,
+                name: '4時間後予測',
+                type: 'scatter', mode: 'lines',
+                line: { color: '#4CAF50', dash: 'dot', width: 1.8 }
+            },
+            {
+                x: data.time_8h, y: data.pred_close_8h,
+                name: '8時間後予測',
+                type: 'scatter', mode: 'lines',
+                line: { color: '#F44336', dash: 'dot', width: 1.8 }
+            },
+            {
+                x: data.signal_buy_t, y: data.signal_buy_p,
+                name: '▲ BUY転換',
+                type: 'scatter', mode: 'markers',
+                marker: { symbol: 'triangle-up', size: 14, color: '#00e676',
+                          line: { color: '#003d20', width: 1 } },
+                hovertemplate: '▲ BUY転換<br>%{x}<br>%{y:.3f}<extra></extra>'
+            },
+            {
+                x: data.signal_sell_t, y: data.signal_sell_p,
+                name: '▼ SELL転換',
+                type: 'scatter', mode: 'markers',
+                marker: { symbol: 'triangle-down', size: 14, color: '#ff1744',
+                          line: { color: '#4a0000', width: 1 } },
+                hovertemplate: '▼ SELL転換<br>%{x}<br>%{y:.3f}<extra></extra>'
+            }
+        ];
+    }
+
+    function computeYRange(data, rangeHours) {
+        var times  = data.time || [];
+        var cutoff = (rangeHours > 0 && times.length > 0)
+            ? new Date(times[times.length - 1]).getTime() - rangeHours * 3600e3
+            : -Infinity;
+        var allY = [];
+        for (var i = 0; i < times.length; i++) {
+            if (new Date(times[i]).getTime() < cutoff) continue;
+            [data.close, data.pred_close_1h, data.pred_close_4h, data.pred_close_8h].forEach(function(arr) {
+                var v = arr && arr[i];
+                if (v != null && !isNaN(v)) allY.push(v);
+            });
+        }
+        if (!allY.length) return null;
+        var minY = Math.min.apply(null, allY);
+        var maxY = Math.max.apply(null, allY);
+        var pad  = Math.max((maxY - minY) * 0.3, 0.05);
+        return [minY - pad, maxY + pad];
+    }
+
+    function buildLayout(rangeHours) {
+        var xRange = null;
+        if (rangeHours > 0 && appData.time.length > 0) {
+            var latest = new Date(appData.time[appData.time.length - 1]);
+            var start  = new Date(latest.getTime() - rangeHours * 3600e3);
+            var end    = new Date(latest.getTime() + rangeHours * 0.04 * 3600e3);
+            xRange = [start.toISOString(), end.toISOString()];
+        }
+        var yRange = computeYRange(appData, rangeHours);
+        return {
+            paper_bgcolor: '#0d0d1a',
+            plot_bgcolor:  '#111130',
+            font: { color: '#c0c8e0', family: 'inherit', size: 12 },
+            xaxis: {
+                type: 'date',
+                range: xRange,
+                gridcolor: '#1e1e48',
+                linecolor: '#2a2a60',
+                tickcolor: '#2a2a60',
+                tickfont: { size: 11 }
+            },
+            yaxis: {
+                range: yRange,
+                autorange: !yRange,
+                gridcolor: '#1e1e48',
+                linecolor: '#2a2a60',
+                tickcolor: '#2a2a60',
+                tickformat: '.3f',
+                title: { text: 'USD/JPY', font: { color: '#888', size: 11 } },
+                tickfont: { size: 11 }
+            },
+            legend: {
+                bgcolor: '#17173a',
+                bordercolor: '#33336a',
+                borderwidth: 1,
+                orientation: 'h',
+                x: 0, y: -0.12,
+                font: { size: 11 }
+            },
+            margin: { t: 16, r: 16, b: 56, l: 72 },
+            dragmode: 'pan',
+            hovermode: 'x unified',
+            hoverlabel: { bgcolor: '#17173a', bordercolor: '#00c8ff', font: { size: 12 } },
+            shapes: buildRegimeShapes(appData)
+        };
+    }
+
+    var plotConfig = {
+        responsive: true,
+        scrollZoom: true,
+        displayModeBar: true,
+        modeBarButtonsToRemove: ['select2d', 'lasso2d', 'autoScale2d'],
+        displaylogo: false
+    };
+
+    var _handlingReset = false;
+
+    function renderChart(data, rangeHours) {
+        appData = data;
+        Plotly.newPlot('chart', buildTraces(data), buildLayout(rangeHours), plotConfig)
+            .then(function() {
+                document.getElementById('chart').on('plotly_relayout', function(ed) {
+                    if (_handlingReset) return;
+                    if (ed['yaxis.autorange'] === true) {
+                        _handlingReset = true;
+                        var yr = computeYRange(appData, currentRange);
+                        if (yr) {
+                            Plotly.relayout('chart', { 'yaxis.autorange': false, 'yaxis.range': yr })
+                                .then(function() { _handlingReset = false; });
+                        } else {
+                            _handlingReset = false;
+                        }
+                    }
+                });
+            });
+    }
+
+    function setRange(hours, btn) {
+        currentRange = hours;
+        document.querySelectorAll('.controls .btn:not(.btn-upload)')
+                .forEach(function(b) { b.classList.remove('active'); });
+        if (btn) btn.classList.add('active');
+
+        if (hours === 0) {
+            Plotly.relayout('chart', { 'xaxis.autorange': true });
+            return;
+        }
+        var latest = new Date(appData.time[appData.time.length - 1]);
+        var start  = new Date(latest.getTime() - hours * 3600e3);
+        var end    = new Date(latest.getTime() + hours * 0.04 * 3600e3);
+        Plotly.relayout('chart', {
+            'xaxis.autorange': false,
+            'xaxis.range': [start.toISOString(), end.toISOString()]
+        });
+    }
+
+    /* ---- File upload ---- */
+    document.getElementById('file-input').addEventListener('change', function(e) {
+        var file = e.target.files[0];
+        if (!file) return;
+
+        document.getElementById('loading').classList.add('show');
+        var fd = new FormData();
+        fd.append('file', file);
+
+        fetch('/upload', { method: 'POST', body: fd })
+            .then(function(r) {
+                if (!r.ok) return r.json().then(function(d) { throw new Error(d.error || 'サーバーエラー'); });
+                return r.json();
+            })
+            .then(function(data) {
+                document.getElementById('loading').classList.remove('show');
+                updateStatus(data);
+                renderChart(data, currentRange);
+            })
+            .catch(function(err) {
+                document.getElementById('loading').classList.remove('show');
+                var em = document.getElementById('error-msg');
+                em.textContent = 'エラー: ' + err.message;
+                em.style.display = 'block';
+                setTimeout(function() { em.style.display = 'none'; }, 4000);
+            });
+
+        e.target.value = '';
+    });
+
+    /* ---- Init ---- */
+    updateStatus(appData);
+    renderChart(appData, 24);
+</script>
+</body>
+</html>
