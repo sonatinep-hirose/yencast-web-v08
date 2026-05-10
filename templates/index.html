@@ -97,6 +97,9 @@
         .btn.active    { background: #003d5c; border-color: #00c8ff; color: #00c8ff; font-weight: 600; }
         .btn-upload    { margin-left: auto; border-color: #4caf50; color: #4caf50; background: #0f2a10; }
         .btn-upload:hover { background: #1a3d1a; color: #81c784; border-color: #81c784; }
+        .btn-sentiment { border-color: #ab47bc; color: #ab47bc; background: #1a0f1f; }
+        .btn-sentiment:hover { background: #2a1a30; color: #ce93d8; border-color: #ce93d8; }
+        .btn-sentiment.active { background: #2d0f40; border-color: #ce93d8; color: #ce93d8; font-weight: 600; }
 
         #chart-wrap {
             flex: 1;
@@ -190,6 +193,7 @@
     <button class="btn" onclick="setRange(72, this)">72時間</button>
     <button class="btn" onclick="setRange(168, this)">1週間</button>
     <button class="btn" onclick="setRange(0, this)">全期間</button>
+    <button class="btn btn-sentiment" id="btn-sentiment" onclick="toggleSentiment(this)">感情スコア</button>
     <input type="file" id="file-input" accept=".csv">
     <button class="btn btn-upload" onclick="document.getElementById('file-input').click()">CSV アップロード</button>
 </div>
@@ -396,6 +400,58 @@
             hoverlabel: { bgcolor: '#17173a', bordercolor: '#00c8ff', font: { size: 12 } },
             shapes: buildRegimeShapes(appData)
         };
+    }
+
+    var showSentiment = false;
+
+    function buildSentimentTraces(data) {
+        var traces = [];
+        var sentDefs = [
+            { key: 'sent_score_1h',  label: '感情 1h',  color: '#ce93d8', dash: 'solid' },
+            { key: 'sent_score_6h',  label: '感情 6h',  color: '#ba68c8', dash: 'dot' },
+            { key: 'sent_score_24h', label: '感情 24h', color: '#9c27b0', dash: 'dash' },
+        ];
+        sentDefs.forEach(function(d) {
+            var arr = data[d.key];
+            if (!arr || arr.length === 0) return;
+            traces.push({
+                x: data.time,
+                y: arr,
+                name: d.label,
+                type: 'scatter',
+                mode: 'lines',
+                yaxis: 'y2',
+                line: { color: d.color, width: 1.5, dash: d.dash },
+                opacity: 0.8,
+                hovertemplate: d.label + '<br>%{x}<br>%{y:.4f}<extra></extra>'
+            });
+        });
+        return traces;
+    }
+
+    function toggleSentiment(btn) {
+        showSentiment = !showSentiment;
+        btn.classList.toggle('active', showSentiment);
+
+        var traces = buildTraces(appData);
+        var layout = buildLayout(currentRange);
+
+        if (showSentiment) {
+            buildSentimentTraces(appData).forEach(function(t) { traces.push(t); });
+            layout.yaxis2 = {
+                title: { text: '感情スコア', font: { color: '#ab47bc', size: 11 } },
+                overlaying: 'y',
+                side: 'right',
+                gridcolor: '#2a1a35',
+                zeroline: true,
+                zerolinecolor: '#6a2a80',
+                tickfont: { size: 10, color: '#ab47bc' },
+                showgrid: false,
+            };
+            layout.legend.y = -0.16;
+        }
+
+        Plotly.newPlot('chart', traces, layout, plotConfig);
     }
 
     var plotConfig = {

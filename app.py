@@ -80,6 +80,12 @@ def process_csv(df):
     ease_raw = pd.to_numeric(df.get("ease_score_r8", pd.Series([-1] * len(df))), errors="coerce").fillna(-1)
     latest_ease = int(ease_raw.iloc[-1]) if len(ease_raw) else -1
 
+    # 感情スコア（列がなければ空リスト）
+    def _sent(col):
+        if col not in df.columns:
+            return []
+        return pd.to_numeric(df[col], errors="coerce").round(4).tolist()
+
     return {
         "time":          times,
         "time_1h":       times_1h,
@@ -93,8 +99,11 @@ def process_csv(df):
         "latest_regime": str(latest.get("regime", "-")),
         "latest_is_valid": to_bool_str(latest.get("is_valid", True)),
         "latest_signal": latest_signal,
-        "latest_ease":   latest_ease,
-        "regime":        df["regime"].tolist() if "regime" in df.columns else [],
+        "latest_ease":     latest_ease,
+        "sent_score_1h":   _sent("sent_score_1h"),
+        "sent_score_6h":   _sent("sent_score_6h"),
+        "sent_score_24h":  _sent("sent_score_24h"),
+        "regime":          df["regime"].tolist() if "regime" in df.columns else [],
         "signal_buy_t":  signal_buy_t,
         "signal_buy_p":  signal_buy_p,
         "signal_sell_t": signal_sell_t,
