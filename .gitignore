@@ -1,0 +1,8 @@
+# Runtime data (written by /update, not source)
+live_data.csv
+*.tmp
+
+# Python
+__pycache__/
+*.py[oc]
+.venv/

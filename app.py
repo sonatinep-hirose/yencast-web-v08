@@ -4,12 +4,21 @@ import numpy as np
 import json
 import io
 import os
+import tempfile
 
 app = Flask(__name__)
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 SAMPLE_CSV = os.path.join(BASE_DIR, "predictions_latest.csv")
 LIVE_CSV   = os.path.join(BASE_DIR, "live_data.csv")
+
+# [W-1] /update は公開 URL なので、共有トークンを知る predictor 以外からの
+# 書き込みを拒否する。Render の環境変数 YENCAST_UPDATE_TOKEN に設定する。
+# 未設定なら認証なし（ローカル開発用）だが、本番では必ず設定すること。
+UPDATE_TOKEN = os.environ.get("YENCAST_UPDATE_TOKEN", "").strip()
+
+# [W-2] 表示・保持する最大行数。これを超える古い行は切り捨てる（描画と計算を軽く保つ）。
+MAX_ROWS = int(os.environ.get("YENCAST_MAX_ROWS", "5000"))
 
 
 def parse_time(df):
@@ -20,7 +29,11 @@ def parse_time(df):
     Returns a Series of timezone-naive datetime (JST assumed).
     """
     if "time_jst" in df.columns:
-        return pd.to_datetime(df["time_jst"], utc=False).dt.tz_localize(None)
+        # [W-5] tz-aware/naive どちらでも落ちないようにする。
+        # tz_localize(None) は tz-naive な Series に対して TypeError を投げるため、
+        # まず utc=True でパースしてから naive 化する（混在入力にも耐える）。
+        s = pd.to_datetime(df["time_jst"], errors="coerce", utc=True)
+        return s.dt.tz_convert(None)
 
     if "time_jst_date" in df.columns and "time_jst_hour" in df.columns:
         combined = df["time_jst_date"].astype(str) + " " + df["time_jst_hour"].astype(str)
@@ -29,10 +42,27 @@ def parse_time(df):
     raise ValueError("時刻列が見つかりません（time_jst または time_jst_date+time_jst_hour）")
 
 
+def _clean_nan(obj):
+    """[NaN対策] JSON に NaN/Inf を出さないよう再帰的に None へ置換する。
+    json.dumps / jsonify は既定で NaN リテラルを吐き、厳密 JSON パーサで壊れるため。
+    """
+    if isinstance(obj, float):
+        return None if (np.isnan(obj) or np.isinf(obj)) else obj
+    if isinstance(obj, list):
+        return [_clean_nan(v) for v in obj]
+    if isinstance(obj, dict):
+        return {k: _clean_nan(v) for k, v in obj.items()}
+    return obj
+
+
 def process_csv(df):
     df = df.copy()
     df["_time"] = parse_time(df)
-    df = df.sort_values("_time").reset_index(drop=True)
+    df = df.dropna(subset=["_time"]).sort_values("_time").reset_index(drop=True)
+
+    # [W-2] 古い行を切り捨てて最大行数を超えないようにする。
+    if MAX_ROWS > 0 and len(df) > MAX_ROWS:
+        df = df.tail(MAX_ROWS).reset_index(drop=True)
 
     def to_iso(series):
         return series.dt.strftime("%Y-%m-%dT%H:%M:%S").tolist()
@@ -54,7 +84,10 @@ def process_csv(df):
             return "True"
         return "False"
 
-    # ---- シグナル計算: pred_close_8h が close を上回るか下回るかで方向を決め、反転した足をシグナルとする ----
+    # close は数値化しておく（文字列で来ても round で落ちないように）
+    close_num = pd.to_numeric(df["close"], errors="coerce")
+
+    # ---- シグナル計算: pred_r8 の符号が反転した足を BUY/SELL シグナルとする ----
     signal_buy_t, signal_buy_p, signal_sell_t, signal_sell_p = [], [], [], []
     latest_signal = "FLAT"
     if "pred_r8" in df.columns:
@@ -63,18 +96,26 @@ def process_csv(df):
 
         cur8  = np.sign(pred_r8)
         prev8 = cur8.shift(1).fillna(0)
-        reversal = (cur8 != prev8) & (cur8 != 0) & (is_valid == 1)
+        # [W-7] invalid 区間明けの 1 本目に誤シグナルが出ないよう、
+        # 今足だけでなく前足も valid であることを条件に加える。
+        prev_valid = is_valid.shift(1).fillna(0)
+        reversal = (cur8 != prev8) & (cur8 != 0) & (is_valid == 1) & (prev_valid == 1)
 
         buy_mask  = reversal & (cur8 > 0)
         sell_mask = reversal & (cur8 < 0)
 
         signal_buy_t  = to_iso(t[buy_mask])
-        signal_buy_p  = df["close"][buy_mask].round(3).tolist()
+        signal_buy_p  = close_num[buy_mask].round(3).tolist()
         signal_sell_t = to_iso(t[sell_mask])
-        signal_sell_p = df["close"][sell_mask].round(3).tolist()
+        signal_sell_p = close_num[sell_mask].round(3).tolist()
 
+        # 最新足の方向: invalid なら FLAT
+        last_valid = float(is_valid.iloc[-1]) if len(is_valid) else 0
         last_dir = float(cur8.iloc[-1]) if len(cur8) else 0
-        latest_signal = "BUY" if last_dir > 0 else ("SELL" if last_dir < 0 else "FLAT")
+        if last_valid != 1:
+            latest_signal = "FLAT"
+        else:
+            latest_signal = "BUY" if last_dir > 0 else ("SELL" if last_dir < 0 else "FLAT")
 
     # ease_score_r8: 0-100 の信頼スコア（-1 = N/A）
     ease_raw = pd.to_numeric(df.get("ease_score_r8", pd.Series([-1] * len(df))), errors="coerce").fillna(-1)
@@ -86,15 +127,18 @@ def process_csv(df):
             return []
         return pd.to_numeric(df[col], errors="coerce").round(4).tolist()
 
-    return {
+    def _num_list(col):
+        return pd.to_numeric(df[col], errors="coerce").round(3).tolist()
+
+    result = {
         "time":          times,
         "time_1h":       times_1h,
         "time_4h":       times_4h,
         "time_8h":       times_8h,
-        "close":         df["close"].round(3).tolist(),
-        "pred_close_1h": df["pred_close_1h"].round(3).tolist(),
-        "pred_close_4h": df["pred_close_4h"].round(3).tolist(),
-        "pred_close_8h": df["pred_close_8h"].round(3).tolist(),
+        "close":         close_num.round(3).tolist(),
+        "pred_close_1h": _num_list("pred_close_1h"),
+        "pred_close_4h": _num_list("pred_close_4h"),
+        "pred_close_8h": _num_list("pred_close_8h"),
         "latest_time":   latest_time,
         "latest_regime": str(latest.get("regime", "-")),
         "latest_is_valid": to_bool_str(latest.get("is_valid", True)),
@@ -109,23 +153,50 @@ def process_csv(df):
         "signal_sell_t": signal_sell_t,
         "signal_sell_p": signal_sell_p,
     }
+    return _clean_nan(result)
+
+
+def _atomic_write_csv(df, path):
+    """[W-8] tmp に書いてから rename することで、書き込み途中の壊れた CSV を
+    / ルートが読むのを防ぐ（rename は同一ディレクトリ内で原子的）。
+    """
+    fd, tmp = tempfile.mkstemp(dir=os.path.dirname(path), suffix=".tmp")
+    os.close(fd)
+    try:
+        df.to_csv(tmp, index=False, encoding="utf-8")
+        os.replace(tmp, path)
+    finally:
+        if os.path.exists(tmp):
+            os.remove(tmp)
 
 
 @app.route("/")
 def index():
-    csv_path = LIVE_CSV if os.path.exists(LIVE_CSV) else SAMPLE_CSV
-    df = pd.read_csv(csv_path)
-    data = process_csv(df)
-    return render_template("index.html", data=json.dumps(data))
+    # [W-6] CSV 欠損列などで落ちてもトップページが 500 にならないようにする。
+    try:
+        csv_path = LIVE_CSV if os.path.exists(LIVE_CSV) else SAMPLE_CSV
+        df = pd.read_csv(csv_path)
+        data = process_csv(df)
+        return render_template("index.html", data=json.dumps(data))
+    except Exception as e:
+        # 最低限のエラーページ（空データ）を返す
+        empty = json.dumps({"time": [], "error": str(e)})
+        return render_template("index.html", data=empty)
 
 
 @app.route("/update", methods=["POST"])
 def update():
+    # [W-1] トークン認証。設定されている場合のみ照合する。
+    if UPDATE_TOKEN:
+        auth = request.headers.get("Authorization", "")
+        token = auth[7:].strip() if auth.startswith("Bearer ") else ""
+        if token != UPDATE_TOKEN:
+            return jsonify({"error": "unauthorized"}), 401
     try:
         content = request.get_data(as_text=True)
         df = pd.read_csv(io.StringIO(content))
         process_csv(df)  # validate
-        df.to_csv(LIVE_CSV, index=False, encoding="utf-8")
+        _atomic_write_csv(df, LIVE_CSV)  # [W-8] アトミック書き込み
         return jsonify({"status": "ok", "rows": len(df)})
     except Exception as e:
         return jsonify({"error": str(e)}), 400
