@@ -161,7 +161,7 @@
 <header>
     <div>
         <div class="logo">YenCast <span style="font-size:0.75rem;color:#888;font-weight:400;">v0.08</span></div>
-        <div class="logo-sub">USD/JPY 価格予測ダッシュボード（感情スコア統合）</div>
+        <div class="logo-sub">USD/JPY 価格予測ダッシュボード（下段: ニュース地合い・参考）</div>
     </div>
 </header>
 
@@ -193,7 +193,6 @@
     <button class="btn" onclick="setRange(72, this)">72時間</button>
     <button class="btn" onclick="setRange(168, this)">1週間</button>
     <button class="btn" onclick="setRange(0, this)">全期間</button>
-    <button class="btn btn-sentiment" id="btn-sentiment" onclick="toggleSentiment(this)">感情スコア</button>
     <input type="file" id="file-input" accept=".csv">
     <button class="btn btn-upload" onclick="document.getElementById('file-input').click()">CSV アップロード</button>
 </div>
@@ -289,9 +288,36 @@
         return shapes;
     }
 
+    /* ---- News mood (参考・予測には不使用) ---- */
+    // 毎時のネット地合いを下段パネル(y3)に緑↑/赤↓のダイバージング棒で表示する。
+    function buildMoodTrace(data) {
+        var net = data.news_net || [];
+        if (!net.length) return null;
+        var bull = data.news_bull || [];
+        var bear = data.news_bear || [];
+        var colors = net.map(function(v) {
+            if (v > 0) return '#1D9E75';
+            if (v < 0) return '#E24B4A';
+            return '#555a7a';
+        });
+        var cdata = net.map(function(_, i) {
+            return [bull[i] != null ? bull[i] : 0, bear[i] != null ? bear[i] : 0];
+        });
+        return {
+            x: data.time, y: net,
+            name: 'ニュース地合い',
+            type: 'bar',
+            yaxis: 'y3',
+            marker: { color: colors },
+            customdata: cdata,
+            hovertemplate: 'ニュース地合い（参考）<br>%{x}<br>上 %{customdata[0]} / 下 %{customdata[1]} ・ ネット %{y}<extra></extra>',
+            showlegend: false
+        };
+    }
+
     /* ---- Chart ---- */
     function buildTraces(data) {
-        return [
+        var traces = [
             {
                 x: data.time, y: data.close,
                 name: '実際の価格 (Close)',
@@ -333,13 +359,27 @@
                 hovertemplate: '▼ SELL転換<br>%{x}<br>%{y:.3f}<extra></extra>'
             }
         ];
+        var mood = buildMoodTrace(data);
+        if (mood) traces.push(mood);
+        return traces;
+    }
+
+    // ページを開いたとき最新価格が画面中央に来るよう、履歴と未来(予測)を振り分ける。
+    // future 側は予測の伸びる先(最大8h)+余白を確保し 12h で頭打ち、残りを履歴に割く。
+    // → 既定の24h表示では latest を中央(±12h)に、広いレンジでは履歴中心になる。
+    function viewBounds(rangeHours) {
+        var times = appData.time || [];
+        if (!(rangeHours > 0) || times.length === 0) return null;
+        var latest  = new Date(times[times.length - 1]).getTime();
+        var futureH = Math.min(rangeHours * 0.5, 12);
+        var histH   = rangeHours - futureH;
+        return { start: latest - histH * 3600e3, end: latest + futureH * 3600e3 };
     }
 
     function computeYRange(data, rangeHours) {
         var times  = data.time || [];
-        var cutoff = (rangeHours > 0 && times.length > 0)
-            ? new Date(times[times.length - 1]).getTime() - rangeHours * 3600e3
-            : -Infinity;
+        var b      = viewBounds(rangeHours);
+        var cutoff = b ? b.start : -Infinity;
         var allY = [];
         for (var i = 0; i < times.length; i++) {
             if (new Date(times[i]).getTime() < cutoff) continue;
@@ -357,11 +397,9 @@
 
     function buildLayout(rangeHours) {
         var xRange = null;
-        if (rangeHours > 0 && appData.time.length > 0) {
-            var latest = new Date(appData.time[appData.time.length - 1]);
-            var start  = new Date(latest.getTime() - rangeHours * 3600e3);
-            var end    = new Date(latest.getTime() + rangeHours * 0.04 * 3600e3);
-            xRange = [start.toISOString(), end.toISOString()];
+        var b = viewBounds(rangeHours);
+        if (b) {
+            xRange = [new Date(b.start).toISOString(), new Date(b.end).toISOString()];
         }
         var yRange = computeYRange(appData, rangeHours);
         return {
@@ -371,6 +409,7 @@
             xaxis: {
                 type: 'date',
                 range: xRange,
+                anchor: 'y3',
                 gridcolor: '#1e1e48',
                 linecolor: '#2a2a60',
                 tickcolor: '#2a2a60',
@@ -379,12 +418,23 @@
             yaxis: {
                 range: yRange,
                 autorange: !yRange,
+                domain: [0.26, 1],
                 gridcolor: '#1e1e48',
                 linecolor: '#2a2a60',
                 tickcolor: '#2a2a60',
                 tickformat: '.3f',
                 title: { text: 'USD/JPY', font: { color: '#888', size: 11 } },
                 tickfont: { size: 11 }
+            },
+            yaxis3: {
+                domain: [0, 0.18],
+                gridcolor: '#1e1e48',
+                linecolor: '#2a2a60',
+                tickcolor: '#2a2a60',
+                zeroline: true,
+                zerolinecolor: '#3a3a70',
+                title: { text: 'ニュース地合い', font: { color: '#888', size: 10 } },
+                tickfont: { size: 10 }
             },
             legend: {
                 bgcolor: '#17173a',
@@ -400,58 +450,6 @@
             hoverlabel: { bgcolor: '#17173a', bordercolor: '#00c8ff', font: { size: 12 } },
             shapes: buildRegimeShapes(appData)
         };
-    }
-
-    var showSentiment = false;
-
-    function buildSentimentTraces(data) {
-        var traces = [];
-        var sentDefs = [
-            { key: 'sent_score_1h',  label: '感情 1h',  color: '#ce93d8', dash: 'solid' },
-            { key: 'sent_score_6h',  label: '感情 6h',  color: '#ba68c8', dash: 'dot' },
-            { key: 'sent_score_24h', label: '感情 24h', color: '#9c27b0', dash: 'dash' },
-        ];
-        sentDefs.forEach(function(d) {
-            var arr = data[d.key];
-            if (!arr || arr.length === 0) return;
-            traces.push({
-                x: data.time,
-                y: arr,
-                name: d.label,
-                type: 'scatter',
-                mode: 'lines',
-                yaxis: 'y2',
-                line: { color: d.color, width: 1.5, dash: d.dash },
-                opacity: 0.8,
-                hovertemplate: d.label + '<br>%{x}<br>%{y:.4f}<extra></extra>'
-            });
-        });
-        return traces;
-    }
-
-    function toggleSentiment(btn) {
-        showSentiment = !showSentiment;
-        btn.classList.toggle('active', showSentiment);
-
-        var traces = buildTraces(appData);
-        var layout = buildLayout(currentRange);
-
-        if (showSentiment) {
-            buildSentimentTraces(appData).forEach(function(t) { traces.push(t); });
-            layout.yaxis2 = {
-                title: { text: '感情スコア', font: { color: '#ab47bc', size: 11 } },
-                overlaying: 'y',
-                side: 'right',
-                gridcolor: '#2a1a35',
-                zeroline: true,
-                zerolinecolor: '#6a2a80',
-                tickfont: { size: 10, color: '#ab47bc' },
-                showgrid: false,
-            };
-            layout.legend.y = -0.16;
-        }
-
-        Plotly.newPlot('chart', traces, layout, plotConfig);
     }
 
     var plotConfig = {
@@ -494,12 +492,10 @@
             Plotly.relayout('chart', { 'xaxis.autorange': true });
             return;
         }
-        var latest = new Date(appData.time[appData.time.length - 1]);
-        var start  = new Date(latest.getTime() - hours * 3600e3);
-        var end    = new Date(latest.getTime() + hours * 0.04 * 3600e3);
+        var b = viewBounds(hours);
         Plotly.relayout('chart', {
             'xaxis.autorange': false,
-            'xaxis.range': [start.toISOString(), end.toISOString()]
+            'xaxis.range': [new Date(b.start).toISOString(), new Date(b.end).toISOString()]
         });
     }
 

@@ -130,6 +130,12 @@ def process_csv(df):
     def _num_list(col):
         return pd.to_numeric(df[col], errors="coerce").round(3).tolist()
 
+    # ニュース地合い（参考・予測には不使用）。列が無ければ空リスト＝パネルは空表示。
+    def _news_list(col):
+        if col not in df.columns:
+            return []
+        return pd.to_numeric(df[col], errors="coerce").tolist()
+
     result = {
         "time":          times,
         "time_1h":       times_1h,
@@ -147,6 +153,9 @@ def process_csv(df):
         "sent_score_1h":   _sent("sent_score_1h"),
         "sent_score_6h":   _sent("sent_score_6h"),
         "sent_score_24h":  _sent("sent_score_24h"),
+        "news_net":        _news_list("news_net"),
+        "news_bull":       _news_list("news_bull"),
+        "news_bear":       _news_list("news_bear"),
         "regime":          df["regime"].tolist() if "regime" in df.columns else [],
         "signal_buy_t":  signal_buy_t,
         "signal_buy_p":  signal_buy_p,
