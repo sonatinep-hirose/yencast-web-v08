@@ -11,9 +11,6 @@
             background: #0d0d1a;
             color: #dde0f0;
             font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Hiragino Sans', sans-serif;
-            min-height: 100vh;
-            display: flex;
-            flex-direction: column;
         }
         header {
             background: #12122a;
@@ -22,7 +19,6 @@
             display: flex;
             align-items: center;
             gap: 14px;
-            flex-shrink: 0;
         }
         .logo { font-size: 1.3rem; font-weight: 700; color: #ce93d8; letter-spacing: 0.05em; }
         .logo-sub { font-size: 0.75rem; color: #666; margin-top: 2px; }
@@ -39,15 +35,17 @@
         }
         .nav-link:hover { background: #22225a; border-color: #00c8ff; }
 
+        /* ステータス: スマホでは2列グリッドに畳む */
         .status-bar {
             background: #0f0f24;
-            padding: 7px 16px;
+            padding: 8px 16px;
             border-bottom: 1px solid #2a2a55;
-            display: flex; gap: 20px; flex-wrap: wrap; align-items: center;
-            font-size: 0.82rem; flex-shrink: 0;
+            display: flex; gap: 18px; flex-wrap: wrap; align-items: center;
+            font-size: 0.82rem;
         }
         .status-item { display: flex; align-items: center; gap: 7px; }
-        .status-label { color: #666; }
+        .status-label { color: #666; white-space: nowrap; }
+        .rate-big { font-size: 1.05rem; font-weight: 700; color: #00c8ff; }
         .badge {
             display: inline-block; padding: 2px 9px; border-radius: 4px;
             font-size: 0.78rem; font-weight: 600; border: 1px solid;
@@ -60,11 +58,24 @@
             padding: 6px 16px; font-size: 0.72rem; color: #667;
             border-bottom: 1px solid #1e1e40;
         }
-        #charts { flex: 1; min-height: 0; display: flex; flex-direction: column; }
-        .chart-box { flex: 1; min-height: 180px; }
+        /* チャートは固定高さ＋ページスクロール（スマホで潰れない） */
+        .chart-box { width: 100%; height: 300px; }
+
         @media (max-width: 540px) {
-            .logo { font-size: 1.1rem; }
-            .status-bar { gap: 12px; font-size: 0.78rem; }
+            header { padding: 8px 10px; gap: 8px; }
+            .logo { font-size: 1.05rem; }
+            .logo-sub { font-size: 0.65rem; }
+            .nav-link { padding: 5px 9px; font-size: 0.72rem; }
+            .status-bar {
+                display: grid;
+                grid-template-columns: 1fr 1fr;
+                gap: 6px 10px;
+                padding: 8px 10px;
+                font-size: 0.75rem;
+            }
+            .status-item.span2 { grid-column: 1 / -1; }
+            .note { font-size: 0.65rem; padding: 5px 10px; }
+            .chart-box { height: 240px; }
         }
     </style>
 </head>
@@ -80,15 +91,15 @@
 
 <div class="status-bar">
     <div class="status-item">
-        <span class="status-label">最終更新:</span>
-        <span id="latest-time">-</span>
+        <span class="status-label">USD/JPY:</span>
+        <span id="rate-val" class="rate-big">-</span>
     </div>
     <div class="status-item">
         <span class="status-label">予想:</span>
         <span id="signal-badge" class="badge badge-neutral">-</span>
     </div>
     <div class="status-item">
-        <span class="status-label">合成スコア:</span>
+        <span class="status-label">合成:</span>
         <span id="score-val">-</span>
     </div>
     <div class="status-item">
@@ -100,8 +111,12 @@
         <span id="cot-val">-</span>
     </div>
     <div class="status-item">
-        <span class="status-label">投機筋ネット円:</span>
+        <span class="status-label">ネット円:</span>
         <span id="cot-net-val">-</span>
+    </div>
+    <div class="status-item span2">
+        <span class="status-label">最終更新:</span>
+        <span id="latest-time">-</span>
     </div>
 </div>
 
@@ -111,6 +126,7 @@
 </div>
 
 <div id="charts">
+    <div id="chart-rate" class="chart-box"></div>
     <div id="chart-forecast" class="chart-box"></div>
     <div id="chart-mood" class="chart-box"></div>
     <div id="chart-cot" class="chart-box"></div>
@@ -118,20 +134,27 @@
 
 <script>
     var data = JSON.parse('{{ data | safe }}');
+    var isMobile = window.matchMedia('(max-width: 540px)').matches;
 
     var baseLayout = {
         paper_bgcolor: '#0d0d1a',
         plot_bgcolor: '#0d0d1a',
-        font: { color: '#dde0f0', size: 11 },
-        margin: { l: 55, r: 15, t: 30, b: 35 },
+        font: { color: '#dde0f0', size: isMobile ? 10 : 11 },
+        margin: isMobile ? { l: 48, r: 8, t: 28, b: 30 } : { l: 55, r: 15, t: 30, b: 35 },
         xaxis: { gridcolor: '#1e1e40', zerolinecolor: '#2a2a55' },
         yaxis: { gridcolor: '#1e1e40', zerolinecolor: '#2a2a55' },
         showlegend: true,
-        legend: { orientation: 'h', y: 1.12, font: { size: 10 } }
+        legend: { orientation: 'h', y: 1.15, font: { size: isMobile ? 9 : 10 } }
     };
-    var config = { responsive: true, displaylogo: false };
+    // スマホではモードバー(ズームアイコン群)を消してタッチ操作を優先する
+    var config = { responsive: true, displaylogo: false, displayModeBar: !isMobile };
 
     function merge(a, b) { return Object.assign({}, JSON.parse(JSON.stringify(a)), b); }
+    function titleFont() { return { size: isMobile ? 11 : 12, color: '#888' }; }
+    function emptyMsg(id, msg) {
+        document.getElementById(id).innerHTML =
+            '<div style="padding:40px;text-align:center;color:#555;">' + msg + '</div>';
+    }
 
     // ---- ステータスバー ----
     var fc = data.forecast || {};
@@ -148,6 +171,11 @@
         document.getElementById('mood-val').textContent  = (fc.mood[n]  >= 0 ? '+' : '') + fc.mood[n];
         document.getElementById('cot-val').textContent   = (fc.cot[n]   >= 0 ? '+' : '') + fc.cot[n];
     }
+    var rate = data.rate || {};
+    if (rate.time && rate.time.length) {
+        document.getElementById('rate-val').textContent =
+            rate.close[rate.close.length - 1].toFixed(3);
+    }
     var cot = data.cot || {};
     if (cot.date && cot.date.length) {
         var m = cot.date.length - 1;
@@ -155,17 +183,39 @@
             cot.net[m].toLocaleString() + ' 枚 (' + cot.date[m] + '週)';
     }
 
+    // ---- チャート0: USD/JPY 実勢レート（YenCast 収集データを流用） ----
+    if (rate.time && rate.time.length) {
+        Plotly.newPlot('chart-rate', [
+            { x: rate.time, y: rate.close, name: 'USD/JPY', mode: 'lines',
+              line: { color: '#00c8ff', width: 1.5 } }
+        ], merge(baseLayout, {
+            title: { text: 'USD/JPY 実勢レート（直近14日 / 1時間足 close）', font: titleFont() },
+            showlegend: false
+        }), config);
+    } else {
+        emptyMsg('chart-rate', 'レートデータ未受信');
+    }
+
     // ---- チャート1: 合成予想スコア ----
     if (fc.time && fc.time.length) {
+        // 運用初期でデータ点が少ない間は線が描けないのでマーカーも打つ。
+        // X軸も時間単位に固定してミリ秒目盛りになるのを防ぐ。
+        var few = fc.time.length < 5;
+        var fcMode = few ? 'lines+markers' : 'lines';
+        var fcXaxis = merge(baseLayout.xaxis, few ? {
+            range: [fc.time[0].slice(0, 13) + ':00:00',
+                    fc.time[fc.time.length - 1].slice(0, 13) + ':59:59']
+        } : {});
         Plotly.newPlot('chart-forecast', [
-            { x: fc.time, y: fc.score, name: '合成スコア', mode: 'lines',
-              line: { color: '#ce93d8', width: 2 } },
-            { x: fc.time, y: fc.mood, name: '地合い', mode: 'lines',
-              line: { color: '#26c6da', width: 1, dash: 'dot' } },
-            { x: fc.time, y: fc.cot, name: 'COT', mode: 'lines',
-              line: { color: '#ffb74d', width: 1, dash: 'dot' } }
+            { x: fc.time, y: fc.score, name: '合成スコア', mode: fcMode,
+              line: { color: '#ce93d8', width: 2 }, marker: { size: 7 } },
+            { x: fc.time, y: fc.mood, name: '地合い', mode: fcMode,
+              line: { color: '#26c6da', width: 1, dash: 'dot' }, marker: { size: 5 } },
+            { x: fc.time, y: fc.cot, name: 'COT', mode: fcMode,
+              line: { color: '#ffb74d', width: 1, dash: 'dot' }, marker: { size: 5 } }
         ], merge(baseLayout, {
-            title: { text: '独立予想スコア（+ = USD/JPY 上昇 = 円安方向）', font: { size: 12, color: '#888' } },
+            xaxis: fcXaxis,
+            title: { text: '独立予想スコア（+ = USD/JPY 上昇 = 円安方向）', font: titleFont() },
             yaxis: merge(baseLayout.yaxis, { range: [-1, 1] }),
             shapes: [
                 { type: 'line', xref: 'paper', x0: 0, x1: 1, y0: 0.15, y1: 0.15,
@@ -175,8 +225,7 @@
             ]
         }), config);
     } else {
-        document.getElementById('chart-forecast').innerHTML =
-            '<div style="padding:40px;text-align:center;color:#555;">予想データ未受信（毎時更新をお待ちください）</div>';
+        emptyMsg('chart-forecast', '予想データ未受信（毎時更新をお待ちください）');
     }
 
     // ---- チャート2: ニュース地合い（毎時 上/下ワード） ----
@@ -191,12 +240,11 @@
               customdata: mood.bull.map(function(b, i) { return [b, mood.bear[i]]; }),
               hovertemplate: '%{x}<br>上 %{customdata[0]} / 下 %{customdata[1]} ・ ネット %{y}<extra></extra>' }
         ], merge(baseLayout, {
-            title: { text: 'ニュース地合い（リークフリー辞書カウント / 毎時）', font: { size: 12, color: '#888' } },
+            title: { text: 'ニュース地合い（リークフリー辞書カウント / 毎時）', font: titleFont() },
             showlegend: false
         }), config);
     } else {
-        document.getElementById('chart-mood').innerHTML =
-            '<div style="padding:40px;text-align:center;color:#555;">地合いデータ未受信</div>';
+        emptyMsg('chart-mood', '地合いデータ未受信');
     }
 
     // ---- チャート3: COT 投機筋ネット円ポジション ----
@@ -210,12 +258,11 @@
               customdata: cot.long.map(function(l, i) { return [l, cot.short[i], cot.oi[i]]; }),
               hovertemplate: '%{x}週<br>ネット %{y:,} 枚<br>long %{customdata[0]:,} / short %{customdata[1]:,}<br>建玉 %{customdata[2]:,}<extra></extra>' }
         ], merge(baseLayout, {
-            title: { text: 'CFTC COT: 投機筋の円ネットポジション（負 = 円ショート = 円安に賭け）', font: { size: 12, color: '#888' } },
+            title: { text: 'CFTC COT: 投機筋の円ネットポジション（負 = 円ショート = 円安に賭け）', font: titleFont() },
             showlegend: false
         }), config);
     } else {
-        document.getElementById('chart-cot').innerHTML =
-            '<div style="padding:40px;text-align:center;color:#555;">COTデータ未受信</div>';
+        emptyMsg('chart-cot', 'COTデータ未受信');
     }
 </script>
 </body>

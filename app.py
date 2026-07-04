@@ -217,8 +217,26 @@ def update():
 
 
 def _fl_process():
-    """ForexLens 3CSV を読み、/forexlens 描画用の JSON dict を作る。"""
-    out = {"forecast": {}, "mood": {}, "cot": {}}
+    """ForexLens 3CSV + YenCast の実勢レートを読み、/forexlens 描画用 JSON を作る。"""
+    out = {"forecast": {}, "mood": {}, "cot": {}, "rate": {}}
+
+    # 実勢レートは predictor が毎時 POST する live_data.csv の close を流用する
+    # （ForexLens 側に新しい価格配線を持たない）。無ければ空＝パネル非表示。
+    try:
+        rate_csv = LIVE_CSV if os.path.exists(LIVE_CSV) else SAMPLE_CSV
+        r = pd.read_csv(rate_csv)
+        r["_t"] = parse_time(r)
+        r = r.dropna(subset=["_t"]).sort_values("_t")
+        # 地合いチャートと同じ約14日分に絞る
+        cutoff = r["_t"].max() - pd.Timedelta(days=14)
+        r = r[r["_t"] >= cutoff]
+        close = pd.to_numeric(r["close"], errors="coerce")
+        out["rate"] = {
+            "time":  r["_t"].dt.strftime("%Y-%m-%dT%H:%M:%S").tolist(),
+            "close": close.round(3).tolist(),
+        }
+    except Exception:
+        pass  # レートが読めなくても ForexLens パネルは表示する
 
     if os.path.exists(FL_FORECAST_CSV):
         f = pd.read_csv(FL_FORECAST_CSV)
