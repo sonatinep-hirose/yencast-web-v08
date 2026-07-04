@@ -12,6 +12,11 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 SAMPLE_CSV = os.path.join(BASE_DIR, "predictions_latest.csv")
 LIVE_CSV   = os.path.join(BASE_DIR, "live_data.csv")
 
+# ForexLens 独立予想（YenCast の ML とは別系統。forex-lens 毎時batが POST する）
+FL_FORECAST_CSV = os.path.join(BASE_DIR, "forexlens_forecast.csv")
+FL_MOOD_CSV     = os.path.join(BASE_DIR, "forexlens_news_mood.csv")
+FL_COT_CSV      = os.path.join(BASE_DIR, "forexlens_cot.csv")
+
 # [W-1] /update は公開 URL なので、共有トークンを知る predictor 以外からの
 # 書き込みを拒否する。Render の環境変数 YENCAST_UPDATE_TOKEN に設定する。
 # 未設定なら認証なし（ローカル開発用）だが、本番では必ず設定すること。
@@ -207,6 +212,93 @@ def update():
         process_csv(df)  # validate
         _atomic_write_csv(df, LIVE_CSV)  # [W-8] アトミック書き込み
         return jsonify({"status": "ok", "rows": len(df)})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 400
+
+
+def _fl_process():
+    """ForexLens 3CSV を読み、/forexlens 描画用の JSON dict を作る。"""
+    out = {"forecast": {}, "mood": {}, "cot": {}}
+
+    if os.path.exists(FL_FORECAST_CSV):
+        f = pd.read_csv(FL_FORECAST_CSV)
+        f["_t"] = pd.to_datetime(f["time_utc"], errors="coerce", utc=True)
+        f = f.dropna(subset=["_t"]).sort_values("_t")
+        # 表示は JST に統一（YenCast 予測ページと合わせる）
+        tj = f["_t"].dt.tz_convert("Asia/Tokyo").dt.strftime("%Y-%m-%dT%H:%M:%S")
+        out["forecast"] = {
+            "time":   tj.tolist(),
+            "score":  pd.to_numeric(f["forecast_score"], errors="coerce").round(4).tolist(),
+            "mood":   pd.to_numeric(f.get("mood_score"), errors="coerce").round(4).tolist(),
+            "cot":    pd.to_numeric(f.get("cot_score"), errors="coerce").round(4).tolist(),
+            "signal": f["signal"].astype(str).tolist(),
+        }
+
+    if os.path.exists(FL_MOOD_CSV):
+        m = pd.read_csv(FL_MOOD_CSV)
+        m["_t"] = pd.to_datetime(m["time_utc"], errors="coerce", utc=True)
+        m = m.dropna(subset=["_t"]).sort_values("_t")
+        tj = m["_t"].dt.tz_convert("Asia/Tokyo").dt.strftime("%Y-%m-%dT%H:%M:%S")
+        out["mood"] = {
+            "time": tj.tolist(),
+            "bull": pd.to_numeric(m["bull_words"], errors="coerce").tolist(),
+            "bear": pd.to_numeric(m["bear_words"], errors="coerce").tolist(),
+            "net":  pd.to_numeric(m["net"], errors="coerce").tolist(),
+        }
+
+    if os.path.exists(FL_COT_CSV):
+        c = pd.read_csv(FL_COT_CSV)
+        c["_t"] = pd.to_datetime(c["report_date"], errors="coerce")
+        c = c.dropna(subset=["_t"]).sort_values("_t")
+        out["cot"] = {
+            "date":  c["_t"].dt.strftime("%Y-%m-%d").tolist(),
+            "net":   pd.to_numeric(c["net_noncomm"], errors="coerce").tolist(),
+            "long":  pd.to_numeric(c["noncomm_long"], errors="coerce").tolist(),
+            "short": pd.to_numeric(c["noncomm_short"], errors="coerce").tolist(),
+            "oi":    pd.to_numeric(c["open_interest"], errors="coerce").tolist(),
+        }
+
+    return _clean_nan(out)
+
+
+@app.route("/forexlens")
+def forexlens():
+    try:
+        data = _fl_process()
+        return render_template("forexlens.html", data=json.dumps(data))
+    except Exception as e:
+        empty = json.dumps({"forecast": {}, "mood": {}, "cot": {}, "error": str(e)})
+        return render_template("forexlens.html", data=empty)
+
+
+@app.route("/update-forexlens", methods=["POST"])
+def update_forexlens():
+    # /update と同じトークンで認証（predictor と forex-lens bat が共用）
+    if UPDATE_TOKEN:
+        auth = request.headers.get("Authorization", "")
+        token = auth[7:].strip() if auth.startswith("Bearer ") else ""
+        if token != UPDATE_TOKEN:
+            return jsonify({"error": "unauthorized"}), 401
+    try:
+        payload = request.get_json(force=True, silent=False) or {}
+        written = {}
+        for key, path, required_cols in (
+            ("forecast",  FL_FORECAST_CSV, ("time_utc", "forecast_score", "signal")),
+            ("news_mood", FL_MOOD_CSV,     ("time_utc", "bull_words", "bear_words", "net")),
+            ("cot",       FL_COT_CSV,      ("report_date", "net_noncomm")),
+        ):
+            text = payload.get(key)
+            if not text:
+                continue
+            df = pd.read_csv(io.StringIO(text))
+            missing = [c for c in required_cols if c not in df.columns]
+            if missing:
+                return jsonify({"error": f"{key}: missing columns {missing}"}), 400
+            _atomic_write_csv(df, path)
+            written[key] = len(df)
+        if not written:
+            return jsonify({"error": "no known keys in payload"}), 400
+        return jsonify({"status": "ok", "written": written})
     except Exception as e:
         return jsonify({"error": str(e)}), 400
 

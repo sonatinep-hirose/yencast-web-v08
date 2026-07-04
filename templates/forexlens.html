@@ -1,0 +1,222 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ForexLens v0.03 - USD/JPY 独立予想</title>
+    <script src="https://cdn.plot.ly/plotly-2.27.0.min.js"></script>
+    <style>
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        body {
+            background: #0d0d1a;
+            color: #dde0f0;
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Hiragino Sans', sans-serif;
+            min-height: 100vh;
+            display: flex;
+            flex-direction: column;
+        }
+        header {
+            background: #12122a;
+            padding: 10px 16px;
+            border-bottom: 1px solid #2a2a55;
+            display: flex;
+            align-items: center;
+            gap: 14px;
+            flex-shrink: 0;
+        }
+        .logo { font-size: 1.3rem; font-weight: 700; color: #ce93d8; letter-spacing: 0.05em; }
+        .logo-sub { font-size: 0.75rem; color: #666; margin-top: 2px; }
+        .nav-link {
+            margin-left: auto;
+            color: #00c8ff;
+            border: 1px solid #33336a;
+            background: #17173a;
+            padding: 6px 14px;
+            border-radius: 5px;
+            text-decoration: none;
+            font-size: 0.82rem;
+            white-space: nowrap;
+        }
+        .nav-link:hover { background: #22225a; border-color: #00c8ff; }
+
+        .status-bar {
+            background: #0f0f24;
+            padding: 7px 16px;
+            border-bottom: 1px solid #2a2a55;
+            display: flex; gap: 20px; flex-wrap: wrap; align-items: center;
+            font-size: 0.82rem; flex-shrink: 0;
+        }
+        .status-item { display: flex; align-items: center; gap: 7px; }
+        .status-label { color: #666; }
+        .badge {
+            display: inline-block; padding: 2px 9px; border-radius: 4px;
+            font-size: 0.78rem; font-weight: 600; border: 1px solid;
+        }
+        .badge-up      { color: #00e676; border-color: #00e676; background: rgba(0,230,118,0.12); }
+        .badge-down    { color: #ff1744; border-color: #ff1744; background: rgba(255,23,68,0.12); }
+        .badge-neutral { color: #888;    border-color: #555;    background: transparent; }
+
+        .note {
+            padding: 6px 16px; font-size: 0.72rem; color: #667;
+            border-bottom: 1px solid #1e1e40;
+        }
+        #charts { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+        .chart-box { flex: 1; min-height: 180px; }
+        @media (max-width: 540px) {
+            .logo { font-size: 1.1rem; }
+            .status-bar { gap: 12px; font-size: 0.78rem; }
+        }
+    </style>
+</head>
+<body>
+
+<header>
+    <div>
+        <div class="logo">ForexLens <span style="font-size:0.75rem;color:#888;font-weight:400;">v0.03</span></div>
+        <div class="logo-sub">USD/JPY 独立予想（ニュース地合い + 投機筋ポジション / YenCast 予測とは別系統）</div>
+    </div>
+    <a class="nav-link" href="/">← YenCast 予測</a>
+</header>
+
+<div class="status-bar">
+    <div class="status-item">
+        <span class="status-label">最終更新:</span>
+        <span id="latest-time">-</span>
+    </div>
+    <div class="status-item">
+        <span class="status-label">予想:</span>
+        <span id="signal-badge" class="badge badge-neutral">-</span>
+    </div>
+    <div class="status-item">
+        <span class="status-label">合成スコア:</span>
+        <span id="score-val">-</span>
+    </div>
+    <div class="status-item">
+        <span class="status-label">地合い:</span>
+        <span id="mood-val">-</span>
+    </div>
+    <div class="status-item">
+        <span class="status-label">COT:</span>
+        <span id="cot-val">-</span>
+    </div>
+    <div class="status-item">
+        <span class="status-label">投機筋ネット円:</span>
+        <span id="cot-net-val">-</span>
+    </div>
+</div>
+
+<div class="note">
+    ※ この予想は ForexLens 単独の参考情報です。YenCast の機械学習予測には使用していません。
+    的中率は未検証です。スコアは -1(下=円高) 〜 +1(上=円安)。COT は CFTC 公表(火曜集計→金曜公開)の週次データ。
+</div>
+
+<div id="charts">
+    <div id="chart-forecast" class="chart-box"></div>
+    <div id="chart-mood" class="chart-box"></div>
+    <div id="chart-cot" class="chart-box"></div>
+</div>
+
+<script>
+    var data = JSON.parse('{{ data | safe }}');
+
+    var baseLayout = {
+        paper_bgcolor: '#0d0d1a',
+        plot_bgcolor: '#0d0d1a',
+        font: { color: '#dde0f0', size: 11 },
+        margin: { l: 55, r: 15, t: 30, b: 35 },
+        xaxis: { gridcolor: '#1e1e40', zerolinecolor: '#2a2a55' },
+        yaxis: { gridcolor: '#1e1e40', zerolinecolor: '#2a2a55' },
+        showlegend: true,
+        legend: { orientation: 'h', y: 1.12, font: { size: 10 } }
+    };
+    var config = { responsive: true, displaylogo: false };
+
+    function merge(a, b) { return Object.assign({}, JSON.parse(JSON.stringify(a)), b); }
+
+    // ---- ステータスバー ----
+    var fc = data.forecast || {};
+    if (fc.time && fc.time.length) {
+        var n = fc.time.length - 1;
+        document.getElementById('latest-time').textContent =
+            fc.time[n].replace('T', ' ') + ' JST';
+        var sig = fc.signal[n] || '-';
+        var badge = document.getElementById('signal-badge');
+        badge.textContent = sig === 'UP' ? '上 (円安方向)' : sig === 'DOWN' ? '下 (円高方向)' : 'ニュートラル';
+        badge.className = 'badge ' +
+            (sig === 'UP' ? 'badge-up' : sig === 'DOWN' ? 'badge-down' : 'badge-neutral');
+        document.getElementById('score-val').textContent = (fc.score[n] >= 0 ? '+' : '') + fc.score[n];
+        document.getElementById('mood-val').textContent  = (fc.mood[n]  >= 0 ? '+' : '') + fc.mood[n];
+        document.getElementById('cot-val').textContent   = (fc.cot[n]   >= 0 ? '+' : '') + fc.cot[n];
+    }
+    var cot = data.cot || {};
+    if (cot.date && cot.date.length) {
+        var m = cot.date.length - 1;
+        document.getElementById('cot-net-val').textContent =
+            cot.net[m].toLocaleString() + ' 枚 (' + cot.date[m] + '週)';
+    }
+
+    // ---- チャート1: 合成予想スコア ----
+    if (fc.time && fc.time.length) {
+        Plotly.newPlot('chart-forecast', [
+            { x: fc.time, y: fc.score, name: '合成スコア', mode: 'lines',
+              line: { color: '#ce93d8', width: 2 } },
+            { x: fc.time, y: fc.mood, name: '地合い', mode: 'lines',
+              line: { color: '#26c6da', width: 1, dash: 'dot' } },
+            { x: fc.time, y: fc.cot, name: 'COT', mode: 'lines',
+              line: { color: '#ffb74d', width: 1, dash: 'dot' } }
+        ], merge(baseLayout, {
+            title: { text: '独立予想スコア（+ = USD/JPY 上昇 = 円安方向）', font: { size: 12, color: '#888' } },
+            yaxis: merge(baseLayout.yaxis, { range: [-1, 1] }),
+            shapes: [
+                { type: 'line', xref: 'paper', x0: 0, x1: 1, y0: 0.15, y1: 0.15,
+                  line: { color: 'rgba(0,230,118,0.3)', width: 1, dash: 'dash' } },
+                { type: 'line', xref: 'paper', x0: 0, x1: 1, y0: -0.15, y1: -0.15,
+                  line: { color: 'rgba(255,23,68,0.3)', width: 1, dash: 'dash' } }
+            ]
+        }), config);
+    } else {
+        document.getElementById('chart-forecast').innerHTML =
+            '<div style="padding:40px;text-align:center;color:#555;">予想データ未受信（毎時更新をお待ちください）</div>';
+    }
+
+    // ---- チャート2: ニュース地合い（毎時 上/下ワード） ----
+    var mood = data.mood || {};
+    if (mood.time && mood.time.length) {
+        var colors = mood.net.map(function(v) {
+            return v >= 0 ? 'rgba(0,230,118,0.7)' : 'rgba(255,23,68,0.7)';
+        });
+        Plotly.newPlot('chart-mood', [
+            { x: mood.time, y: mood.net, type: 'bar', name: 'ネット地合い',
+              marker: { color: colors },
+              customdata: mood.bull.map(function(b, i) { return [b, mood.bear[i]]; }),
+              hovertemplate: '%{x}<br>上 %{customdata[0]} / 下 %{customdata[1]} ・ ネット %{y}<extra></extra>' }
+        ], merge(baseLayout, {
+            title: { text: 'ニュース地合い（リークフリー辞書カウント / 毎時）', font: { size: 12, color: '#888' } },
+            showlegend: false
+        }), config);
+    } else {
+        document.getElementById('chart-mood').innerHTML =
+            '<div style="padding:40px;text-align:center;color:#555;">地合いデータ未受信</div>';
+    }
+
+    // ---- チャート3: COT 投機筋ネット円ポジション ----
+    if (cot.date && cot.date.length) {
+        var cotColors = cot.net.map(function(v) {
+            return v >= 0 ? 'rgba(255,23,68,0.7)' : 'rgba(0,230,118,0.7)';  // 円ロング=USD/JPY下方向=赤
+        });
+        Plotly.newPlot('chart-cot', [
+            { x: cot.date, y: cot.net, type: 'bar', name: '投機筋ネット円',
+              marker: { color: cotColors },
+              customdata: cot.long.map(function(l, i) { return [l, cot.short[i], cot.oi[i]]; }),
+              hovertemplate: '%{x}週<br>ネット %{y:,} 枚<br>long %{customdata[0]:,} / short %{customdata[1]:,}<br>建玉 %{customdata[2]:,}<extra></extra>' }
+        ], merge(baseLayout, {
+            title: { text: 'CFTC COT: 投機筋の円ネットポジション（負 = 円ショート = 円安に賭け）', font: { size: 12, color: '#888' } },
+            showlegend: false
+        }), config);
+    } else {
+        document.getElementById('chart-cot').innerHTML =
+            '<div style="padding:40px;text-align:center;color:#555;">COTデータ未受信</div>';
+    }
+</script>
+</body>
+</html>

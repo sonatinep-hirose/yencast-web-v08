@@ -6,3 +6,6 @@ live_data.csv
 __pycache__/
 *.py[oc]
 .venv/
+
+# ForexLens runtime data (written by /update-forexlens, not source)
+forexlens_*.csv
