@@ -35,7 +35,6 @@
         }
         .nav-link:hover { background: #22225a; border-color: #00c8ff; }
 
-        /* ステータス: スマホでは2列グリッドに畳む */
         .status-bar {
             background: #0f0f24;
             padding: 8px 16px;
@@ -58,8 +57,19 @@
             padding: 6px 16px; font-size: 0.72rem; color: #667;
             border-bottom: 1px solid #1e1e40;
         }
-        /* チャートは固定高さ＋ページスクロール（スマホで潰れない） */
-        .chart-box { width: 100%; height: 300px; }
+        .hint {
+            padding: 4px 16px; font-size: 0.7rem; color: #556;
+        }
+        #chart-main { width: 100%; height: 680px; }
+        #chart-cot  { width: 100%; height: 320px; }
+        .section-title {
+            padding: 10px 16px 0; font-size: 0.85rem; color: #888;
+            border-top: 1px solid #1e1e40; margin-top: 4px;
+        }
+
+        /* 縦スワイプはページスクロールとしてブラウザに返す。
+           横スワイプだけ Plotly が受け取り x 軸パン（=期間さかのぼり）になる */
+        .js-plotly-plot .nsewdrag { touch-action: pan-y !important; }
 
         @media (max-width: 540px) {
             header { padding: 8px 10px; gap: 8px; }
@@ -75,7 +85,8 @@
             }
             .status-item.span2 { grid-column: 1 / -1; }
             .note { font-size: 0.65rem; padding: 5px 10px; }
-            .chart-box { height: 240px; }
+            #chart-main { height: 600px; }
+            #chart-cot  { height: 280px; }
         }
     </style>
 </head>
@@ -124,145 +135,165 @@
     ※ この予想は ForexLens 単独の参考情報です。YenCast の機械学習予測には使用していません。
     的中率は未検証です。スコアは -1(下=円高) 〜 +1(上=円安)。COT は CFTC 公表(火曜集計→金曜公開)の週次データ。
 </div>
+<div class="hint">操作: 横スワイプ/ドラッグ = 期間移動 ・ 上のボタン = 表示期間 ・ ダブルタップ = リセット</div>
 
-<div id="charts">
-    <div id="chart-rate" class="chart-box"></div>
-    <div id="chart-forecast" class="chart-box"></div>
-    <div id="chart-mood" class="chart-box"></div>
-    <div id="chart-cot" class="chart-box"></div>
-</div>
+<div id="chart-main"></div>
+<div class="section-title">CFTC COT: 投機筋の円ネットポジション（負 = 円ショート = 円安に賭け / 週次）</div>
+<div id="chart-cot"></div>
 
 <script>
     var data = JSON.parse('{{ data | safe }}');
     var isMobile = window.matchMedia('(max-width: 540px)').matches;
 
-    var baseLayout = {
-        paper_bgcolor: '#0d0d1a',
-        plot_bgcolor: '#0d0d1a',
-        font: { color: '#dde0f0', size: isMobile ? 10 : 11 },
-        margin: isMobile ? { l: 48, r: 8, t: 28, b: 30 } : { l: 55, r: 15, t: 30, b: 35 },
-        xaxis: { gridcolor: '#1e1e40', zerolinecolor: '#2a2a55' },
-        yaxis: { gridcolor: '#1e1e40', zerolinecolor: '#2a2a55' },
-        showlegend: true,
-        legend: { orientation: 'h', y: 1.15, font: { size: isMobile ? 9 : 10 } }
-    };
-    // スマホではモードバー(ズームアイコン群)を消してタッチ操作を優先する
-    var config = { responsive: true, displaylogo: false, displayModeBar: !isMobile };
+    var GRID = '#1e1e40', ZERO = '#2a2a55', FONT = '#dde0f0';
+    var config = { responsive: true, displaylogo: false, displayModeBar: false, scrollZoom: false };
 
-    function merge(a, b) { return Object.assign({}, JSON.parse(JSON.stringify(a)), b); }
-    function titleFont() { return { size: isMobile ? 11 : 12, color: '#888' }; }
-    function emptyMsg(id, msg) {
-        document.getElementById(id).innerHTML =
-            '<div style="padding:40px;text-align:center;color:#555;">' + msg + '</div>';
-    }
+    var selectorStyle = {
+        bgcolor: '#17173a', activecolor: '#003d5c', bordercolor: '#33336a', borderwidth: 1,
+        font: { color: '#aab0d0', size: isMobile ? 10 : 11 }, y: 1.02, x: 0
+    };
 
     // ---- ステータスバー ----
     var fc = data.forecast || {};
+    var rate = data.rate || {};
+    var mood = data.mood || {};
+    var cot = data.cot || {};
+
     if (fc.time && fc.time.length) {
         var n = fc.time.length - 1;
-        document.getElementById('latest-time').textContent =
-            fc.time[n].replace('T', ' ') + ' JST';
+        document.getElementById('latest-time').textContent = fc.time[n].replace('T', ' ') + ' JST';
         var sig = fc.signal[n] || '-';
         var badge = document.getElementById('signal-badge');
         badge.textContent = sig === 'UP' ? '上 (円安方向)' : sig === 'DOWN' ? '下 (円高方向)' : 'ニュートラル';
-        badge.className = 'badge ' +
-            (sig === 'UP' ? 'badge-up' : sig === 'DOWN' ? 'badge-down' : 'badge-neutral');
+        badge.className = 'badge ' + (sig === 'UP' ? 'badge-up' : sig === 'DOWN' ? 'badge-down' : 'badge-neutral');
         document.getElementById('score-val').textContent = (fc.score[n] >= 0 ? '+' : '') + fc.score[n];
         document.getElementById('mood-val').textContent  = (fc.mood[n]  >= 0 ? '+' : '') + fc.mood[n];
         document.getElementById('cot-val').textContent   = (fc.cot[n]   >= 0 ? '+' : '') + fc.cot[n];
     }
-    var rate = data.rate || {};
     if (rate.time && rate.time.length) {
-        document.getElementById('rate-val').textContent =
-            rate.close[rate.close.length - 1].toFixed(3);
+        document.getElementById('rate-val').textContent = rate.close[rate.close.length - 1].toFixed(3);
     }
-    var cot = data.cot || {};
     if (cot.date && cot.date.length) {
         var m = cot.date.length - 1;
         document.getElementById('cot-net-val').textContent =
             cot.net[m].toLocaleString() + ' 枚 (' + cot.date[m] + '週)';
     }
 
-    // ---- チャート0: USD/JPY 実勢レート（YenCast 収集データを流用） ----
-    if (rate.time && rate.time.length) {
-        Plotly.newPlot('chart-rate', [
-            { x: rate.time, y: rate.close, name: 'USD/JPY', mode: 'lines',
-              line: { color: '#00c8ff', width: 1.5 } }
-        ], merge(baseLayout, {
-            title: { text: 'USD/JPY 実勢レート（直近14日 / 1時間足 close）', font: titleFont() },
-            showlegend: false
-        }), config);
-    } else {
-        emptyMsg('chart-rate', 'レートデータ未受信');
-    }
+    // ---- メイン: レート/予想/地合いを共有X軸で縦に並べる ----
+    var traces = [];
+    var haveAny = false;
 
-    // ---- チャート1: 合成予想スコア ----
+    if (rate.time && rate.time.length) {
+        haveAny = true;
+        traces.push({ x: rate.time, y: rate.close, name: 'USD/JPY', mode: 'lines',
+                      line: { color: '#00c8ff', width: 1.5 }, yaxis: 'y',
+                      hovertemplate: 'USD/JPY %{y:.3f}<extra></extra>' });
+    }
     if (fc.time && fc.time.length) {
-        // 運用初期でデータ点が少ない間は線が描けないのでマーカーも打つ。
-        // X軸も時間単位に固定してミリ秒目盛りになるのを防ぐ。
+        haveAny = true;
         var few = fc.time.length < 5;
         var fcMode = few ? 'lines+markers' : 'lines';
-        var fcXaxis = merge(baseLayout.xaxis, few ? {
-            range: [fc.time[0].slice(0, 13) + ':00:00',
-                    fc.time[fc.time.length - 1].slice(0, 13) + ':59:59']
-        } : {});
-        Plotly.newPlot('chart-forecast', [
-            { x: fc.time, y: fc.score, name: '合成スコア', mode: fcMode,
-              line: { color: '#ce93d8', width: 2 }, marker: { size: 7 } },
-            { x: fc.time, y: fc.mood, name: '地合い', mode: fcMode,
-              line: { color: '#26c6da', width: 1, dash: 'dot' }, marker: { size: 5 } },
-            { x: fc.time, y: fc.cot, name: 'COT', mode: fcMode,
-              line: { color: '#ffb74d', width: 1, dash: 'dot' }, marker: { size: 5 } }
-        ], merge(baseLayout, {
-            xaxis: fcXaxis,
-            title: { text: '独立予想スコア（+ = USD/JPY 上昇 = 円安方向）', font: titleFont() },
-            yaxis: merge(baseLayout.yaxis, { range: [-1, 1] }),
+        traces.push({ x: fc.time, y: fc.score, name: '合成スコア', mode: fcMode, yaxis: 'y2',
+                      line: { color: '#ce93d8', width: 2 }, marker: { size: 6 },
+                      hovertemplate: '合成 %{y:+.3f}<extra></extra>' });
+        traces.push({ x: fc.time, y: fc.mood, name: '地合いスコア', mode: fcMode, yaxis: 'y2',
+                      line: { color: '#26c6da', width: 1, dash: 'dot' }, marker: { size: 4 },
+                      hovertemplate: '地合い %{y:+.3f}<extra></extra>' });
+        traces.push({ x: fc.time, y: fc.cot, name: 'COTスコア', mode: fcMode, yaxis: 'y2',
+                      line: { color: '#ffb74d', width: 1, dash: 'dot' }, marker: { size: 4 },
+                      hovertemplate: 'COT %{y:+.3f}<extra></extra>' });
+    }
+    if (mood.time && mood.time.length) {
+        haveAny = true;
+        traces.push({ x: mood.time, y: mood.net, type: 'bar', name: '上下ワード差', yaxis: 'y3',
+                      marker: { color: mood.net.map(function(v) {
+                          return v >= 0 ? 'rgba(0,230,118,0.7)' : 'rgba(255,23,68,0.7)'; }) },
+                      customdata: mood.bull.map(function(b, i) { return [b, mood.bear[i]]; }),
+                      hovertemplate: '上 %{customdata[0]} / 下 %{customdata[1]} ・ ネット %{y}<extra></extra>' });
+    }
+
+    if (haveAny) {
+        // 直近7日を初期表示（スライダー/ボタン/横パンで全期間に戻れる）
+        var allTimes = (rate.time || []).concat(fc.time || [], mood.time || []).sort();
+        var tMax = allTimes[allTimes.length - 1];
+        var tEnd = new Date(tMax);
+        var tStart = new Date(tEnd.getTime() - 7 * 86400 * 1000);
+
+        Plotly.newPlot('chart-main', traces, {
+            paper_bgcolor: '#0d0d1a',
+            plot_bgcolor: '#0d0d1a',
+            font: { color: FONT, size: isMobile ? 10 : 11 },
+            margin: { l: isMobile ? 48 : 55, r: isMobile ? 8 : 15, t: 42, b: 20 },
+            showlegend: true,
+            legend: { orientation: 'h', y: -0.06, font: { size: isMobile ? 9 : 10 } },
+            hovermode: 'x unified',
+            hoverlabel: { bgcolor: '#17173a', bordercolor: '#33336a', font: { size: 10 } },
+            dragmode: 'pan',
+            xaxis: {
+                gridcolor: GRID, zerolinecolor: ZERO,
+                range: [tStart.toISOString().slice(0, 19), tMax],
+                rangeselector: Object.assign({ buttons: [
+                    { count: 1,  label: '1日', step: 'day', stepmode: 'backward' },
+                    { count: 3,  label: '3日', step: 'day', stepmode: 'backward' },
+                    { count: 7,  label: '7日', step: 'day', stepmode: 'backward' },
+                    { step: 'all', label: '全部' }
+                ]}, selectorStyle),
+                rangeslider: { visible: true, thickness: 0.05, bgcolor: '#12122a', bordercolor: '#2a2a55' },
+                showspikes: true, spikemode: 'across', spikecolor: '#555', spikethickness: 1, spikedash: 'dot'
+            },
+            // 縦3段: レート / 予想スコア / 地合い。Y軸は固定(誤ズーム防止・縦はページスクロール)
+            yaxis:  { domain: [0.70, 1.00], gridcolor: GRID, zerolinecolor: ZERO, fixedrange: true,
+                      title: { text: 'USD/JPY', font: { color: '#00c8ff', size: 10 } } },
+            yaxis2: { domain: [0.37, 0.66], gridcolor: GRID, zerolinecolor: ZERO, fixedrange: true,
+                      range: [-1, 1],
+                      title: { text: '予想スコア', font: { color: '#ce93d8', size: 10 } } },
+            yaxis3: { domain: [0.04, 0.33], gridcolor: GRID, zerolinecolor: ZERO, fixedrange: true,
+                      title: { text: '地合い', font: { color: '#26c6da', size: 10 } } },
             shapes: [
-                { type: 'line', xref: 'paper', x0: 0, x1: 1, y0: 0.15, y1: 0.15,
+                { type: 'line', xref: 'paper', yref: 'y2', x0: 0, x1: 1, y0: 0.15, y1: 0.15,
                   line: { color: 'rgba(0,230,118,0.3)', width: 1, dash: 'dash' } },
-                { type: 'line', xref: 'paper', x0: 0, x1: 1, y0: -0.15, y1: -0.15,
+                { type: 'line', xref: 'paper', yref: 'y2', x0: 0, x1: 1, y0: -0.15, y1: -0.15,
                   line: { color: 'rgba(255,23,68,0.3)', width: 1, dash: 'dash' } }
             ]
-        }), config);
+        }, config);
     } else {
-        emptyMsg('chart-forecast', '予想データ未受信（毎時更新をお待ちください）');
+        document.getElementById('chart-main').innerHTML =
+            '<div style="padding:40px;text-align:center;color:#555;">データ未受信（毎時更新をお待ちください）</div>';
     }
 
-    // ---- チャート2: ニュース地合い（毎時 上/下ワード） ----
-    var mood = data.mood || {};
-    if (mood.time && mood.time.length) {
-        var colors = mood.net.map(function(v) {
-            return v >= 0 ? 'rgba(0,230,118,0.7)' : 'rgba(255,23,68,0.7)';
-        });
-        Plotly.newPlot('chart-mood', [
-            { x: mood.time, y: mood.net, type: 'bar', name: 'ネット地合い',
-              marker: { color: colors },
-              customdata: mood.bull.map(function(b, i) { return [b, mood.bear[i]]; }),
-              hovertemplate: '%{x}<br>上 %{customdata[0]} / 下 %{customdata[1]} ・ ネット %{y}<extra></extra>' }
-        ], merge(baseLayout, {
-            title: { text: 'ニュース地合い（リークフリー辞書カウント / 毎時）', font: titleFont() },
-            showlegend: false
-        }), config);
-    } else {
-        emptyMsg('chart-mood', '地合いデータ未受信');
-    }
-
-    // ---- チャート3: COT 投機筋ネット円ポジション ----
+    // ---- COT（週次・5年）: 別スケールなので独立。操作系は同じ ----
     if (cot.date && cot.date.length) {
-        var cotColors = cot.net.map(function(v) {
-            return v >= 0 ? 'rgba(255,23,68,0.7)' : 'rgba(0,230,118,0.7)';  // 円ロング=USD/JPY下方向=赤
-        });
+        var lastD = new Date(cot.date[cot.date.length - 1]);
+        var startD = new Date(lastD.getTime() - 365 * 86400 * 1000);
         Plotly.newPlot('chart-cot', [
             { x: cot.date, y: cot.net, type: 'bar', name: '投機筋ネット円',
-              marker: { color: cotColors },
+              marker: { color: cot.net.map(function(v) {
+                  return v >= 0 ? 'rgba(255,23,68,0.7)' : 'rgba(0,230,118,0.7)'; }) },
               customdata: cot.long.map(function(l, i) { return [l, cot.short[i], cot.oi[i]]; }),
               hovertemplate: '%{x}週<br>ネット %{y:,} 枚<br>long %{customdata[0]:,} / short %{customdata[1]:,}<br>建玉 %{customdata[2]:,}<extra></extra>' }
-        ], merge(baseLayout, {
-            title: { text: 'CFTC COT: 投機筋の円ネットポジション（負 = 円ショート = 円安に賭け）', font: titleFont() },
-            showlegend: false
-        }), config);
+        ], {
+            paper_bgcolor: '#0d0d1a',
+            plot_bgcolor: '#0d0d1a',
+            font: { color: FONT, size: isMobile ? 10 : 11 },
+            margin: { l: isMobile ? 48 : 55, r: isMobile ? 8 : 15, t: 36, b: 20 },
+            showlegend: false,
+            dragmode: 'pan',
+            xaxis: {
+                gridcolor: GRID, zerolinecolor: ZERO,
+                range: [startD.toISOString().slice(0, 10), cot.date[cot.date.length - 1]],
+                rangeselector: Object.assign({ buttons: [
+                    { count: 6,  label: '6ヶ月', step: 'month', stepmode: 'backward' },
+                    { count: 1,  label: '1年',  step: 'year',  stepmode: 'backward' },
+                    { count: 3,  label: '3年',  step: 'year',  stepmode: 'backward' },
+                    { step: 'all', label: '全部' }
+                ]}, selectorStyle),
+                rangeslider: { visible: true, thickness: 0.08, bgcolor: '#12122a', bordercolor: '#2a2a55' }
+            },
+            yaxis: { gridcolor: GRID, zerolinecolor: ZERO, fixedrange: true }
+        }, config);
     } else {
-        emptyMsg('chart-cot', 'COTデータ未受信');
+        document.getElementById('chart-cot').innerHTML =
+            '<div style="padding:40px;text-align:center;color:#555;">COTデータ未受信</div>';
     }
 </script>
 </body>
