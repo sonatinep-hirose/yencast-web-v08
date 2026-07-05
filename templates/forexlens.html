@@ -136,6 +136,9 @@
     的中率は未検証です。スコアは -1(下=円高) 〜 +1(上=円安)。COT は CFTC 公表(火曜集計→金曜公開)の週次データ。
 </div>
 <div class="hint">操作: 横スワイプ/ドラッグ = 期間移動 ・ 上のボタン = 表示期間 ・ ダブルタップ = リセット</div>
+<div class="hint" id="weekend-note" style="display:none;color:#c99;">
+    ⚠️ 週末はFX市場が閉場中のため、レートは金曜終値で停止します（月曜寄付で再開）。ニュース地合い・予想は週末も更新されます。
+</div>
 
 <div id="chart-main"></div>
 <div class="section-title">CFTC COT: 投機筋の円ネットポジション（負 = 円ショート = 円安に賭け / 週次）</div>
@@ -213,11 +216,20 @@
     }
 
     if (haveAny) {
-        // 直近7日を初期表示（スライダー/ボタン/横パンで全期間に戻れる）
+        // 初期表示は直近3日（スライダー/ボタン/横パンで全期間に戻れる）
         var allTimes = (rate.time || []).concat(fc.time || [], mood.time || []).sort();
         var tMax = allTimes[allTimes.length - 1];
         var tEnd = new Date(tMax);
-        var tStart = new Date(tEnd.getTime() - 7 * 86400 * 1000);
+        var tStart = new Date(tEnd.getTime() - 3 * 86400 * 1000);
+
+        // 週末判定: レートの最新がニュースの最新より6h以上前なら市場閉場中とみなし注記を出す
+        if (rate.time && rate.time.length && mood.time && mood.time.length) {
+            var rateLast = new Date(rate.time[rate.time.length - 1]);
+            var newsLast = new Date(mood.time[mood.time.length - 1]);
+            if ((newsLast - rateLast) > 6 * 3600 * 1000) {
+                document.getElementById('weekend-note').style.display = 'block';
+            }
+        }
 
         Plotly.newPlot('chart-main', traces, {
             paper_bgcolor: '#0d0d1a',
