@@ -7,5 +7,5 @@ __pycache__/
 *.py[oc]
 .venv/
 
-# ForexLens runtime data (written by /update-forexlens, not source)
-forexlens_*.csv
+# ForexLens の CSV は「コミット済みフォールバック」として追跡する
+# (Render 無料プランは再起動でディスクが消えるため。predictions_latest.csv と同じ方式)
