@@ -60,8 +60,8 @@
         .hint {
             padding: 4px 16px; font-size: 0.7rem; color: #556;
         }
-        #chart-main { width: 100%; height: 680px; }
-        #chart-cot  { width: 100%; height: 320px; }
+        #chart-main { width: 100%; height: 840px; }
+        #chart-cot  { width: 100%; height: 300px; }
         .section-title {
             padding: 10px 16px 0; font-size: 0.85rem; color: #888;
             border-top: 1px solid #1e1e40; margin-top: 4px;
@@ -85,8 +85,8 @@
             }
             .status-item.span2 { grid-column: 1 / -1; }
             .note { font-size: 0.65rem; padding: 5px 10px; }
-            #chart-main { height: 600px; }
-            #chart-cot  { height: 280px; }
+            #chart-main { height: 760px; }
+            #chart-cot  { height: 260px; }
         }
     </style>
 </head>
@@ -141,7 +141,7 @@
 </div>
 
 <div id="chart-main"></div>
-<div class="section-title">CFTC COT: 投機筋の円ネットポジション（負 = 円ショート = 円安に賭け / 週次）</div>
+<div class="section-title">▼ CFTC COT 長期推移（週次・最大5年） — 上の「COTネット」段は同じ値を毎時軸に合わせて前方補完したもの</div>
 <div id="chart-cot"></div>
 
 <script>
@@ -215,6 +215,27 @@
                       hovertemplate: '上 %{customdata[0]} / 下 %{customdata[1]} ・ ネット %{y}<extra></extra>' });
     }
 
+    // COT を毎時タイムラインに前方補完(ステップ)して同じX軸の4段目に載せる。
+    // COTは週次なので、各時刻には「その時点で発表済みの最新ポジション」を割り当てる。
+    // 発表ラグ(火曜集計→金曜公開)を守るため report_date + 3日を反映開始点にする。
+    function stepFillCot(timeline, cotDates, cotVals) {
+        var pub = cotDates.map(function(d) { return new Date(new Date(d).getTime() + 3 * 86400000); });
+        var out = [], j = 0;
+        for (var i = 0; i < timeline.length; i++) {
+            var t = new Date(timeline[i]);
+            while (j + 1 < pub.length && pub[j + 1] <= t) j++;
+            out.push(pub[j] <= t ? cotVals[j] : null);
+        }
+        return out;
+    }
+    if (mood.time && mood.time.length && cot.date && cot.date.length) {
+        var cotStep = stepFillCot(mood.time, cot.date, cot.net);
+        traces.push({ x: mood.time, y: cotStep, name: '投機筋ネット円', mode: 'lines', yaxis: 'y4',
+                      line: { color: '#ffb74d', width: 1.5, shape: 'hv' },
+                      fill: 'tozeroy', fillcolor: 'rgba(255,183,77,0.08)',
+                      hovertemplate: '投機筋ネット円 %{y:,.0f}枚<extra></extra>' });
+    }
+
     if (haveAny) {
         // 初期表示は直近3日（スライダー/ボタン/横パンで全期間に戻れる）
         var allTimes = (rate.time || []).concat(fc.time || [], mood.time || []).sort();
@@ -253,19 +274,24 @@
                 rangeslider: { visible: true, thickness: 0.05, bgcolor: '#12122a', bordercolor: '#2a2a55' },
                 showspikes: true, spikemode: 'across', spikecolor: '#555', spikethickness: 1, spikedash: 'dot'
             },
-            // 縦3段: レート / 予想スコア / 地合い。Y軸は固定(誤ズーム防止・縦はページスクロール)
-            yaxis:  { domain: [0.70, 1.00], gridcolor: GRID, zerolinecolor: ZERO, fixedrange: true,
+            // 縦4段(レート/予想スコア/地合い/COT)。予想スコアと地合いは同じ高さ(0.21)。
+            // Y軸は固定(誤ズーム防止・縦はページスクロール)
+            yaxis:  { domain: [0.79, 1.00], gridcolor: GRID, zerolinecolor: ZERO, fixedrange: true,
                       title: { text: 'USD/JPY', font: { color: '#00c8ff', size: 10 } } },
-            yaxis2: { domain: [0.37, 0.66], gridcolor: GRID, zerolinecolor: ZERO, fixedrange: true,
+            yaxis2: { domain: [0.54, 0.75], gridcolor: GRID, zerolinecolor: ZERO, fixedrange: true,
                       range: [-1, 1],
                       title: { text: '予想スコア', font: { color: '#ce93d8', size: 10 } } },
-            yaxis3: { domain: [0.04, 0.33], gridcolor: GRID, zerolinecolor: ZERO, fixedrange: true,
+            yaxis3: { domain: [0.29, 0.50], gridcolor: GRID, zerolinecolor: ZERO, fixedrange: true,
                       title: { text: '地合い', font: { color: '#26c6da', size: 10 } } },
+            yaxis4: { domain: [0.04, 0.25], gridcolor: GRID, zerolinecolor: ZERO, fixedrange: true,
+                      title: { text: 'COTネット', font: { color: '#ffb74d', size: 10 } } },
             shapes: [
                 { type: 'line', xref: 'paper', yref: 'y2', x0: 0, x1: 1, y0: 0.15, y1: 0.15,
                   line: { color: 'rgba(0,230,118,0.3)', width: 1, dash: 'dash' } },
                 { type: 'line', xref: 'paper', yref: 'y2', x0: 0, x1: 1, y0: -0.15, y1: -0.15,
-                  line: { color: 'rgba(255,23,68,0.3)', width: 1, dash: 'dash' } }
+                  line: { color: 'rgba(255,23,68,0.3)', width: 1, dash: 'dash' } },
+                { type: 'line', xref: 'paper', yref: 'y4', x0: 0, x1: 1, y0: 0, y1: 0,
+                  line: { color: '#556', width: 1 } }
             ]
         }, config);
     } else {
