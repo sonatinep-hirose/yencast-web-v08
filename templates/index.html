@@ -411,6 +411,9 @@
                 type: 'date',
                 range: xRange,
                 anchor: 'y3',
+                // 週末はFX市場が閉まりデータが無い(横一直線になる)ため軸ごと折り畳む。
+                // JSTでは土曜早朝までNY市場の足があるので、境界は 土7:00〜月6:00 (day of week: 日=0..土=6)
+                rangebreaks: [ { pattern: 'day of week', bounds: [6 + 7 / 24, 1 + 6 / 24] } ],
                 gridcolor: '#1e1e48',
                 linecolor: '#2a2a60',
                 tickcolor: '#2a2a60',
