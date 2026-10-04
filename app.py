@@ -5,6 +5,8 @@ import json
 import io
 import os
 import tempfile
+import time
+import urllib.request
 
 app = Flask(__name__)
 
@@ -24,6 +26,54 @@ UPDATE_TOKEN = os.environ.get("YENCAST_UPDATE_TOKEN", "").strip()
 
 # [W-2] 表示・保持する最大行数。これを超える古い行は切り捨てる（描画と計算を軽く保つ）。
 MAX_ROWS = int(os.environ.get("YENCAST_MAX_ROWS", "5000"))
+
+# [W-9] Render 無料枠対策: CSV の git push では再デプロイしない（Render の Build Filters で
+# *.csv を Ignored Paths に設定）。毎時デプロイが月500分のビルド枠を月末に使い切り、
+# デプロイ不能になったため。代わりに GitHub raw から最新 CSV を読む（リポジトリは public）。
+# 空文字にすると無効化し、同梱 CSV / POST で書かれた CSV だけを読む（ローカル開発用）。
+DATA_BASE_URL = os.environ.get(
+    "YENCAST_DATA_BASE_URL",
+    "https://raw.githubusercontent.com/sonatinep-hirose/yencast-web-v08/master/",
+).strip()
+# GitHub raw 自体も約5分 CDN キャッシュされるので、これより短くしても鮮度は上がらない
+DATA_TTL_SEC = int(os.environ.get("YENCAST_DATA_TTL_SEC", "300"))
+_remote_cache = {}  # name -> (fetched_at, text or None)
+
+
+def _fetch_remote_csv(name):
+    """GitHub raw から CSV テキストを取得する（TTL キャッシュ付き）。失敗時は None。"""
+    if not DATA_BASE_URL:
+        return None
+    now = time.time()
+    hit = _remote_cache.get(name)
+    if hit and now - hit[0] < DATA_TTL_SEC:
+        return hit[1]
+    try:
+        url = DATA_BASE_URL.rstrip("/") + "/" + name
+        with urllib.request.urlopen(url, timeout=5) as resp:
+            text = resp.read().decode("utf-8-sig")
+        _remote_cache[name] = (now, text)
+        return text
+    except Exception as e:
+        app.logger.warning("[WARN] remote csv fetch failed (%s): %s", name, e)
+        # 失敗も TTL 間キャッシュする。GitHub 障害時に毎リクエスト timeout 待ちにしない
+        prev = hit[1] if hit else None
+        _remote_cache[name] = (now, prev)
+        return prev
+
+
+def _read_csv(name, *local_paths):
+    """GitHub raw の最新 CSV を優先し、取れなければローカル（POST 受信 / 同梱）を読む。"""
+    text = _fetch_remote_csv(name)
+    if text:
+        try:
+            return pd.read_csv(io.StringIO(text))
+        except Exception as e:
+            app.logger.warning("[WARN] remote csv parse failed (%s): %s", name, e)
+    for path in local_paths:
+        if os.path.exists(path):
+            return pd.read_csv(path)
+    return None
 
 
 def parse_time(df):
@@ -188,8 +238,9 @@ def _atomic_write_csv(df, path):
 def index():
     # [W-6] CSV 欠損列などで落ちてもトップページが 500 にならないようにする。
     try:
-        csv_path = LIVE_CSV if os.path.exists(LIVE_CSV) else SAMPLE_CSV
-        df = pd.read_csv(csv_path)
+        df = _read_csv("predictions_latest.csv", LIVE_CSV, SAMPLE_CSV)
+        if df is None:
+            raise FileNotFoundError("predictions_latest.csv")
         data = process_csv(df)
         return render_template("index.html", data=json.dumps(data))
     except Exception as e:
@@ -220,11 +271,10 @@ def _fl_process():
     """ForexLens 3CSV + YenCast の実勢レートを読み、/forexlens 描画用 JSON を作る。"""
     out = {"forecast": {}, "mood": {}, "cot": {}, "rate": {}}
 
-    # 実勢レートは predictor が毎時 POST する live_data.csv の close を流用する
+    # 実勢レートは YenCast の予測 CSV の close を流用する
     # （ForexLens 側に新しい価格配線を持たない）。無ければ空＝パネル非表示。
     try:
-        rate_csv = LIVE_CSV if os.path.exists(LIVE_CSV) else SAMPLE_CSV
-        r = pd.read_csv(rate_csv)
+        r = _read_csv("predictions_latest.csv", LIVE_CSV, SAMPLE_CSV)
         r["_t"] = parse_time(r)
         r = r.dropna(subset=["_t"]).sort_values("_t")
         # 地合いチャートと同じ約14日分に絞る
@@ -238,8 +288,8 @@ def _fl_process():
     except Exception:
         pass  # レートが読めなくても ForexLens パネルは表示する
 
-    if os.path.exists(FL_FORECAST_CSV):
-        f = pd.read_csv(FL_FORECAST_CSV)
+    f = _read_csv("forexlens_forecast.csv", FL_FORECAST_CSV)
+    if f is not None:
         f["_t"] = pd.to_datetime(f["time_utc"], errors="coerce", utc=True)
         f = f.dropna(subset=["_t"]).sort_values("_t")
         # 表示は JST に統一（YenCast 予測ページと合わせる）
@@ -252,8 +302,8 @@ def _fl_process():
             "signal": f["signal"].astype(str).tolist(),
         }
 
-    if os.path.exists(FL_MOOD_CSV):
-        m = pd.read_csv(FL_MOOD_CSV)
+    m = _read_csv("forexlens_news_mood.csv", FL_MOOD_CSV)
+    if m is not None:
         m["_t"] = pd.to_datetime(m["time_utc"], errors="coerce", utc=True)
         m = m.dropna(subset=["_t"]).sort_values("_t")
         tj = m["_t"].dt.tz_convert("Asia/Tokyo").dt.strftime("%Y-%m-%dT%H:%M:%S")
@@ -264,8 +314,8 @@ def _fl_process():
             "net":  pd.to_numeric(m["net"], errors="coerce").tolist(),
         }
 
-    if os.path.exists(FL_COT_CSV):
-        c = pd.read_csv(FL_COT_CSV)
+    c = _read_csv("forexlens_cot.csv", FL_COT_CSV)
+    if c is not None:
         c["_t"] = pd.to_datetime(c["report_date"], errors="coerce")
         c = c.dropna(subset=["_t"]).sort_values("_t")
         out["cot"] = {
@@ -338,4 +388,5 @@ def upload():
 
 
 if __name__ == "__main__":
-    app.run(debug=True)
+    # ローカル開発用。割り当てポート(PORT)があれば従う（本番は render.yaml の gunicorn 起動）。
+    app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)), debug=True)
