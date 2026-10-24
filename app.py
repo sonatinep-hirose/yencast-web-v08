@@ -112,7 +112,9 @@ def _clean_nan(obj):
 
 def process_csv(df):
     df = df.copy()
-    df["_time"] = parse_time(df)
+    # 予測CSVの時刻は OANDA の足の開始時刻で、close はその 1 時間後の価格。
+    # チャートの時刻を価格の実時刻に合わせるため足の終了時刻(+1h)で描く
+    df["_time"] = parse_time(df) + pd.Timedelta(hours=1)
     df = df.dropna(subset=["_time"]).sort_values("_time").reset_index(drop=True)
 
     # [W-2] 古い行を切り捨てて最大行数を超えないようにする。
@@ -275,7 +277,8 @@ def _fl_process():
     # （ForexLens 側に新しい価格配線を持たない）。無ければ空＝パネル非表示。
     try:
         r = _read_csv("predictions_latest.csv", LIVE_CSV, SAMPLE_CSV)
-        r["_t"] = parse_time(r)
+        # YenCast の時刻は足の開始時刻なので、close の実時刻（終了時刻）に合わせる
+        r["_t"] = parse_time(r) + pd.Timedelta(hours=1)
         r = r.dropna(subset=["_t"]).sort_values("_t")
         # 地合いチャートと同じ約14日分に絞る
         cutoff = r["_t"].max() - pd.Timedelta(days=14)
