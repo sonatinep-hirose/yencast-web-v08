@@ -27,13 +27,14 @@ UPDATE_TOKEN = os.environ.get("YENCAST_UPDATE_TOKEN", "").strip()
 # [W-2] 表示・保持する最大行数。これを超える古い行は切り捨てる（描画と計算を軽く保つ）。
 MAX_ROWS = int(os.environ.get("YENCAST_MAX_ROWS", "5000"))
 
-# [W-9] Render 無料枠対策: CSV の git push では再デプロイしない（Render の Build Filters で
-# *.csv を Ignored Paths に設定）。毎時デプロイが月500分のビルド枠を月末に使い切り、
-# デプロイ不能になったため。代わりに GitHub raw から最新 CSV を読む（リポジトリは public）。
+# [W-9] Render 無料枠対策: 毎時バッチの CSV は data ブランチにだけ push し、ここでは
+# GitHub raw の data ブランチから読む (リポジトリは public)。Render は master だけを
+# デプロイするので、データ更新ではビルド枠 (月500分) を消費しない。
+# (Build Filters で *.csv を除外する方式は効かず、2026-10-27 に再び枠切れした)
 # 空文字にすると無効化し、同梱 CSV / POST で書かれた CSV だけを読む（ローカル開発用）。
 DATA_BASE_URL = os.environ.get(
     "YENCAST_DATA_BASE_URL",
-    "https://raw.githubusercontent.com/sonatinep-hirose/yencast-web-v08/master/",
+    "https://raw.githubusercontent.com/sonatinep-hirose/yencast-web-v08/data/",
 ).strip()
 # GitHub raw 自体も約5分 CDN キャッシュされるので、これより短くしても鮮度は上がらない
 DATA_TTL_SEC = int(os.environ.get("YENCAST_DATA_TTL_SEC", "300"))
